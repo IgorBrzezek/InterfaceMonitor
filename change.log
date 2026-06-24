@@ -10,7 +10,10 @@ v0.0.3
 v0.0.4
 + --int INTERFACE to filter displayed interfaces
 
+v0.0.5 
++ --color vga|hgc|mono for display in colors or mono (with Hercules old DOS style :) 
+
 FUTURE:
 
-v0.0.5 
-+ --color vga|hgc|mono for display in colors or mono (with Hercules odl DOS style :)
+v0.0.6
++ --console for display in simple style CLI not TUI

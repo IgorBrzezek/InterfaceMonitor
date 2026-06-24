@@ -1,6 +1,6 @@
 # IMon — Interface Monitor TUI
 
-**Version 0.0.4** by Igor Brzezek
+**Version 0.0.5** by Igor Brzezek
 
 A terminal-based network interface monitor that displays all network interfaces with their MAC addresses, IP configuration, gateway, DHCP/STATUS status, and real-time traffic rates in a curses TUI (Text User Interface).
 
@@ -35,6 +35,8 @@ python imon.py                                        # run with imon.cfg in the
 python imon.py -c my.cfg                              # use a custom config file
 python imon.py --int eth0                             # monitor only eth0
 python imon.py --int eth0,wlan0,enp3s0                # monitor specific interfaces
+python imon.py --color hgc                            # amber monochrome (Hercules style)
+python imon.py --color mono                           # black & white mode
 python imon.py --version                              # print version and exit
 ```
 
@@ -91,6 +93,20 @@ Shows the hostname, number of detected interfaces, keyboard shortcut hints, and 
 
 ---
 
+## Color Modes
+
+The terminal color scheme can be changed with the `--color` CLI flag or the `color_mode` config option.
+
+| Mode | Description |
+|---|---|
+| `vga` (default) | Full 256-color palette — all interface states, traffic rates, ping bars, and popups are color-coded |
+| `hgc` | Amber monochrome — emulates a Hercules Graphics Card amber-phosphor monitor. All text rendered in RGB(255,145,0) on black |
+| `mono` | Black & white — all text rendered in white on black, no color distinctions |
+
+In `hgc` and `mono` modes, all color settings in `[colors]` and `[ping]` are overridden; any individual color customizations are ignored while the mode is active.
+
+---
+
 ## Keyboard Shortcuts
 
 | Key | Action |
@@ -141,9 +157,10 @@ All settings are defined in `imon.cfg` (standard INI format). Below is a complet
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `app_name` | string | `IMon` | Name shown in the top status bar |
-| `version` | string | `0.0.4` | Version string displayed next to app name |
+| `version` | string | `0.0.5` | Version string displayed next to app name |
 | `author` | string | `Igor Brzezek` | Author name shown in `--version` output |
 | `refresh_interval_ms` | int | `1000` | TUI redraw interval in milliseconds |
+| `color_mode` | string | `vga` | Color mode: `vga` (full color), `hgc` (amber monochrome), `mono` (black & white) |
 | `background_char` | string | `" "` (space) | Character used to fill the screen background; useful with block chars like `░`, `▒`, `▓` |
 
 ### `[display]`

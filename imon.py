@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# IMon v0.0.4 by Igor Brzezek
+# IMon v0.0.5 by Igor Brzezek
 """Interface Monitor TUI — display all network interfaces with MAC, IP,
 gateway, DHCP/STATIC and real-time traffic rates.
 
@@ -37,7 +37,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.4"
+SCRIPT_VERSION = "0.0.5"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 
@@ -117,7 +117,10 @@ def format_datetime(fmt: str = "%d-%m-%Y %H:%M:%S") -> str:
 
 # Extended colour numbers (resolved at runtime in _init_extended_colors)
 COLOR_ORANGE = 16
+COLOR_AMBER  = 208  # xterm-256color #ff8700 = RGB(255,135,0), closest to amber; init_color tries to refine to exact 255,145,0
 COLOR_GRAY   = 244  # xterm-256color medium gray (safe fallback)
+
+HGC_FG = curses.COLOR_YELLOW  # 3 – ANSI yellow, maps to bright 11 via A_BOLD
 
 COLOR_MAP = {
     "black":   curses.COLOR_BLACK,
@@ -247,6 +250,7 @@ class Config:
     network: NetworkConfig = field(default_factory=NetworkConfig)
     ping: PingThresholds = field(default_factory=PingThresholds)
     popup: PopupConfig = field(default_factory=PopupConfig)
+    color_mode: str = "vga"
     traceroute_cmd: str = "mtr"
     color_pairs: Dict[str, int] = field(default_factory=dict)
 
@@ -256,10 +260,13 @@ class Config:
 # ---------------------------------------------------------------------------
 
 _pair_counter = 1
+_mda_suppress = False
 
 
-def register_color_pair(fg: int, bg: int) -> int:
+def register_color_pair(fg: int, bg: int, force: bool = False) -> int:
     global _pair_counter
+    if _mda_suppress and not force:
+        return 0
     pair_id = _pair_counter
     _pair_counter += 1
     try:
@@ -281,11 +288,25 @@ def _resolve_gray():
 
 
 def _init_extended_colors():
-    """Try to initialise custom colours (orange)."""
+    """Try to initialise custom colours (orange, HGC amber tones)."""
     try:
         curses.init_color(16, 1000, 600, 0)
     except curses.error:
         COLOR_MAP["orange"] = curses.COLOR_YELLOW
+    # Best-effort: try to make ANSI yellow (3) → dark amber and
+    # bright yellow (11) → bright amber.  If init_color fails,
+    # the fallback yellow is still visible.
+    for idx, r, g, b in (
+        (3,  780, 450, 15),   # RGB(199,115,4)  → 0-1000
+        (11, 988, 560, 0),    # RGB(252,143,0)  → 0-1000
+    ):
+        try:
+            curses.init_color(idx, r, g, b)
+        except curses.error:
+            pass
+
+
+AMBER_FG = curses.COLOR_YELLOW
 
 
 def init_colors(cfg: Config) -> None:
@@ -294,7 +315,14 @@ def init_colors(cfg: Config) -> None:
     cc = cfg.colors
     pairs = {}
 
-    pairs["background"] = register_color_pair(curses.COLOR_WHITE, cc.background)
+    _init_extended_colors()
+    _apply_color_mode(cfg)
+    resolved_gray = _resolve_gray()
+
+    pairs["background"] = register_color_pair(
+        HGC_FG if cfg.color_mode == "hgc" else curses.COLOR_WHITE,
+        cc.background,
+        force=cfg.color_mode != "mda")
 
     color_fields = [
         "status_bar_top", "status_bar_bottom", "border", "border_title",
@@ -307,10 +335,10 @@ def init_colors(cfg: Config) -> None:
         fg, bg = getattr(cc, name)
         pairs[name] = register_color_pair(fg, bg)
 
-    pairs["header_bg"] = register_color_pair(curses.COLOR_WHITE, cc.header_bg)
-
-    _init_extended_colors()
-    resolved_gray = _resolve_gray()
+    if cfg.color_mode == "hgc":
+        pairs["header_bg"] = register_color_pair(HGC_FG, cc.header_bg)
+    else:
+        pairs["header_bg"] = register_color_pair(curses.COLOR_WHITE, cc.header_bg)
 
     pc2 = cfg.popup
     # Resolve gray in popup colours
@@ -345,6 +373,8 @@ def init_colors(cfg: Config) -> None:
 
 
 def get_attr(cfg: Config, name: str, bold: bool = False) -> int:
+    if _mda_suppress:
+        bold = False
     pair_id = cfg.color_pairs.get(name, 0)
     attr = curses.color_pair(pair_id)
     if bold:
@@ -372,6 +402,10 @@ def load_config(path: Optional[str] = None) -> Config:
         cfg.refresh_interval_ms = g.getint("refresh_interval_ms", cfg.refresh_interval_ms)
         bg = g.get("background_char", cfg.background_char)
         cfg.background_char = bg if bg else " "
+        if "color_mode" in g:
+            val = g["color_mode"].strip().lower()
+            if val in ("vga", "hgc", "mono"):
+                cfg.color_mode = val
 
     if cp.has_section("colors"):
         c = cp["colors"]
@@ -469,6 +503,50 @@ def load_config(path: Optional[str] = None) -> Config:
             pc2.border_double = p.getboolean("border_double")
 
     return cfg
+
+
+def _apply_color_mode(cfg: Config) -> None:
+    if cfg.color_mode == "vga":
+        return
+
+    global _mda_suppress
+    black = curses.COLOR_BLACK
+
+    if cfg.color_mode == "mda":
+        _mda_suppress = True
+        fg = -1
+        try:
+            curses.putp(b"\033[38;2;255;145;0m")
+            curses.putp(b"\033[48;2;0;0;0m")
+        except curses.error:
+            pass
+    elif cfg.color_mode == "hgc":
+        _mda_suppress = False
+        fg = HGC_FG  # 3 = ANSI yellow; A_BOLD maps to bright yellow (11)
+        # Falls through to the mono path below
+    else:
+        fg = curses.COLOR_WHITE
+
+    # mono path (also reused as generic fallback)
+    cc = cfg.colors
+    for fn in ["status_bar_top", "status_bar_bottom", "border", "border_title",
+                "text_normal", "text_label", "text_value", "text_warning",
+                "text_error", "highlight", "traffic_up", "traffic_dn",
+                "dhcp_color", "static_color",
+                "state_down", "state_up_noip", "state_down_hasip"]:
+        setattr(cc, fn, (fg, black))
+    cc.background = black
+    cc.header_bg = black
+
+    pc = cfg.ping
+    for fn in ["color_green", "color_yellow", "color_orange",
+                "color_magenta", "color_red", "color_critical"]:
+        setattr(pc, fn, (fg, black))
+
+    pc2 = cfg.popup
+    pc2.bg = (fg, black)
+    pc2.border_fg = fg
+    pc2.border_bg = black
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +894,7 @@ class UIManager:
         try:
             req = urllib.request.Request(
                 "https://api.ipify.org",
-                headers={"User-Agent": "IMon/0.0.4"},
+                headers={"User-Agent": "IMon/0.0.5"},
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.read().decode("utf-8").strip()
@@ -869,6 +947,12 @@ class UIManager:
 
         self.stdscr.noutrefresh()
         curses.doupdate()
+        if self.cfg.color_mode == "mda":
+            try:
+                curses.putp(b"\033[38;2;255;145;0m")
+                curses.putp(b"\033[48;2;0;0;0m")
+            except curses.error:
+                pass
 
     # -- Status bars -------------------------------------------------------
 
@@ -1129,10 +1213,13 @@ class UIManager:
 
     def _draw_help_popup(self, h: int, w: int):
         pw = min(50, w - 6)
+        color_modes = {"vga": "VGA (full color)", "hgc": "HGC (amber)", "mono": "MONO (B&W)"}
+        cur_mode = color_modes.get(self.cfg.color_mode, self.cfg.color_mode)
         items = [
             ("Version:", SCRIPT_VERSION),
             ("Author:",  SCRIPT_AUTHOR),
             ("GitHub:",  SCRIPT_GITHUB),
+            ("Color:",   cur_mode),
             ("", ""),
             ("H",   "Toggle this help"),
             ("I",   "Toggle colors info"),
@@ -1670,6 +1757,11 @@ def main_loop(stdscr, cfg: Config):
                 if not ui.handle_key(key):
                     break
     finally:
+        if cfg.color_mode in ("hgc", "mda"):
+            try:
+                curses.putp(b"\033[0m")
+            except curses.error:
+                pass
         collector.stop()
         collector.join(2)
 
@@ -1681,6 +1773,8 @@ def main():
                         help="Path to config file (default: imon.cfg)")
     parser.add_argument("--int", metavar="IFACE",
                         help="Comma-separated interface name(s) to monitor (e.g. eth0,wlan0)")
+    parser.add_argument("--color", choices=("vga", "hgc", "mono", "mda"),
+                        help="Color mode: vga (default, full color), hgc (two-tone amber), mono (black & white), mda (amber monochrome)")
     parser.add_argument("--version", action="store_true",
                         help="Show version and exit")
     args = parser.parse_args()
@@ -1691,6 +1785,9 @@ def main():
         cfg_path = os.path.join(script_dir, "imon.cfg")
 
     cfg = load_config(cfg_path)
+
+    if args.color:
+        cfg.color_mode = args.color
 
     if args.int:
         cfg.display.interface_filter = {x.strip() for x in args.int.split(",") if x.strip()}
