@@ -1,6 +1,6 @@
 # IMon — Interface Monitor TUI
 
-**Version 0.0.5** by Igor Brzezek
+**Version 0.0.6** by Igor Brzezek
 
 A terminal-based network interface monitor that displays all network interfaces with their MAC addresses, IP configuration, gateway, DHCP/STATUS status, and real-time traffic rates in a curses TUI (Text User Interface).
 
@@ -37,6 +37,7 @@ python imon.py --int eth0                             # monitor only eth0
 python imon.py --int eth0,wlan0,enp3s0                # monitor specific interfaces
 python imon.py --color hgc                            # amber monochrome (Hercules style)
 python imon.py --color mono                           # black & white mode
+python imon.py --console                              # console mode with ANSI colors (no TUI)
 python imon.py --version                              # print version and exit
 ```
 
@@ -90,6 +91,18 @@ Rate units auto-scale: B/s, KB/s, MB/s, GB/s.
 
 ### 3. Bottom status bar
 Shows the hostname, number of detected interfaces, keyboard shortcut hints, and the current date/time.
+
+---
+
+## Console Mode (`--console`)
+
+Instead of the curses TUI, you can run IMon in console mode:
+
+```bash
+python imon.py --console
+```
+
+This outputs the same interface and traffic data directly to the terminal with ANSI colors, no curses required. Press `q` or Ctrl+C to exit. The display refreshes at the same interval as the TUI mode.
 
 ---
 
@@ -157,7 +170,7 @@ All settings are defined in `imon.cfg` (standard INI format). Below is a complet
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `app_name` | string | `IMon` | Name shown in the top status bar |
-| `version` | string | `0.0.5` | Version string displayed next to app name |
+| `version` | string | `0.0.6` | Version string displayed next to app name |
 | `author` | string | `Igor Brzezek` | Author name shown in `--version` output |
 | `refresh_interval_ms` | int | `1000` | TUI redraw interval in milliseconds |
 | `color_mode` | string | `vga` | Color mode: `vga` (full color), `hgc` (amber monochrome), `mono` (black & white) |

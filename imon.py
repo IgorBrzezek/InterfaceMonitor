@@ -6,6 +6,7 @@ gateway, DHCP/STATIC and real-time traffic rates.
 Usage:
   python IMon.py               # run with imon.cfg in same directory
   python IMon.py -c my.cfg     # custom config
+  python IMon.py --console     # console mode with ANSI colors (no TUI)
   python IMon.py --version     # show version
 
 Requirements:
@@ -17,11 +18,14 @@ import configparser
 import curses
 import os
 import re
+import select
 import socket
 import subprocess
 import sys
+import termios
 import threading
 import time
+import tty
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -37,7 +41,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.5"
+SCRIPT_VERSION = "0.0.6"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 
@@ -1766,6 +1770,167 @@ def main_loop(stdscr, cfg: Config):
         collector.join(2)
 
 
+# ---------------------------------------------------------------------------
+# Console mode
+# ---------------------------------------------------------------------------
+
+_CS = {
+    "rst":    "\033[0m",
+    "bold":   "\033[1m",
+    "dim":    "\033[2m",
+    "black":  "\033[30m", "red":    "\033[31m",
+    "green":  "\033[32m", "yellow": "\033[33m",
+    "blue":   "\033[34m", "magenta":"\033[35m",
+    "cyan":   "\033[36m", "white":  "\033[37m",
+    "bg_blue":"\033[44m",
+}
+
+def _c(col: str, text: str, bold: bool = False, end: str = "") -> str:
+    b = _CS["bold"] if bold else ""
+    return f"{b}{_CS.get(col, '')}{text}{_CS['rst']}{end}"
+
+
+def console_main(cfg: Config) -> None:
+    state = MonitorState()
+    collector = InterfaceCollector(
+        state, cfg.network.interface_interval, cfg.display.show_loopback,
+    )
+    collector.start()
+    collect_interfaces(state, cfg.display.show_loopback)
+
+    dc = cfg.display
+    hostname = socket.gethostname()
+    can_read_keys = sys.stdin.isatty()
+    if can_read_keys:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+
+    try:
+        while True:
+            sys.stdout.write("\033[2J\033[H")
+
+            top = f" {cfg.app_name} v{cfg.version} "
+            if dc.show_hostname:
+                top += f"  {hostname}"
+            if dc.show_iface_count:
+                with state.lock:
+                    cnt = len(state.interfaces)
+                top += f"  [{cnt} ifaces]"
+            if dc.show_datetime:
+                dt = format_datetime(dc.datetime_format)
+                top += " " * max(2, 80 - len(top) - len(dt) - 2)
+                top += dt
+            print(f"{_CS['bold']}{_CS['white']}{_CS['bg_blue']}{top}{_CS['rst']}")
+
+            with state.lock:
+                ifaces = list(state.interfaces.values())
+            if cfg.display.interface_filter:
+                ifaces = [i for i in ifaces if i.name in cfg.display.interface_filter]
+
+            nw = max(8, dc.interface_name_width)
+            mw = max(8, dc.mac_width)
+            i4w = max(8, dc.ipv4_width)
+            gw = max(8, dc.gateway_width)
+            i6w = max(8, dc.ipv6_width)
+
+            hdr = (
+                f"  {'Name':<{nw}}  {'MAC':<{mw}}  {'DS':<2}  "
+                f"{'IPv4/Mask':<{i4w}}  {'Gateway':<{gw}}  {'IPv6':<{i6w}}"
+            )
+
+            print()
+            print(f"  {_c('cyan', 'Interfaces', bold=True)}")
+            print(f"  {_c('white', hdr, bold=True)}")
+            print(f"  {'─' * len(hdr)}")
+
+            for iface in ifaces:
+                nm = iface.name[:nw].ljust(nw)
+                mc = iface.mac[:mw].ljust(mw)
+                ipv4_str = f"{iface.ipv4}/{iface.prefix}" if iface.prefix else iface.ipv4
+                i4 = ipv4_str[:i4w].ljust(i4w)
+                gw4 = iface.gateway4[:gw].ljust(gw)
+                if iface.ipv6:
+                    i6s = iface.ipv6
+                    if iface.ipv6_prefix:
+                        with_prefix = f"{iface.ipv6}/{iface.ipv6_prefix}"
+                        if len(with_prefix) <= i6w:
+                            i6s = with_prefix
+                else:
+                    i6s = "-"
+                i6 = i6s[:i6w].ljust(i6w)
+
+                if not iface.ipv4:
+                    ds_val = "N"
+                elif iface.is_dhcp:
+                    ds_val = "D"
+                else:
+                    ds_val = "S"
+                ds = ds_val.ljust(2)
+
+                if not iface.is_up and iface.ipv4:
+                    col = "magenta"
+                elif not iface.is_up:
+                    col = "red"
+                elif not iface.ipv4:
+                    col = "yellow"
+                else:
+                    col = "green"
+
+                print(f"  {_c(col, f'{nm}  {mc}  {ds}  {i4}  {gw4}  {i6}', bold=True)}")
+
+            col_w = max(10, dc.traffic_rate_width)
+            tr_hdr = (
+                f" {'Interface':<{nw}} "
+                f"{'Up':>{col_w}} {'Dn':>{col_w}} "
+                f"{'Tx':>{col_w}} {'Rx':>{col_w}} "
+                f"{'Pkt/s':>{col_w}}"
+            )
+
+            print()
+            print(f"  {_c('cyan', 'Traffic', bold=True)}")
+            print(f"  {_c('white', tr_hdr, bold=True)}")
+            print(f"  {'─' * len(tr_hdr)}")
+
+            for iface in ifaces:
+                nm = iface.name[:nw].ljust(nw)
+                up = format_rate(iface.bytes_sent_rate)[:col_w].rjust(col_w)
+                dn = format_rate(iface.bytes_recv_rate)[:col_w].rjust(col_w)
+                tx = format_bytes(iface.bytes_sent)[:col_w].rjust(col_w)
+                rx = format_bytes(iface.bytes_recv)[:col_w].rjust(col_w)
+                pkt = format_pkt_rate(iface.packets_sent_rate + iface.packets_recv_rate)[:col_w].rjust(col_w)
+
+                if not iface.is_up and iface.ipv4:
+                    col = "magenta"
+                elif not iface.is_up:
+                    col = "red"
+                elif not iface.ipv4:
+                    col = "yellow"
+                else:
+                    col = "green"
+
+                print(f"  {_c(col, f'{nm} ')}{_c('green', up, bold=True)} {_c('yellow', dn, bold=True)} {_c('white', tx)} {_c('white', rx)} {_c('white', pkt)}")
+
+            print(f"\n  {_c('green', '[q] Quit', bold=True)}")
+
+            sys.stdout.flush()
+
+            if can_read_keys:
+                for _ in range(10):
+                    r, _, _ = select.select([sys.stdin], [], [], cfg.refresh_interval_ms / 10000.0)
+                    if r and sys.stdin.read(1).lower() == 'q':
+                        return
+            else:
+                time.sleep(cfg.refresh_interval_ms / 1000.0)
+    except KeyboardInterrupt:
+        print()
+    finally:
+        if can_read_keys:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        collector.stop()
+        collector.join(2)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=f"IMon v{SCRIPT_VERSION} \u2014 Interface Monitor TUI by {SCRIPT_AUTHOR} ({SCRIPT_GITHUB})")
@@ -1775,6 +1940,8 @@ def main():
                         help="Comma-separated interface name(s) to monitor (e.g. eth0,wlan0)")
     parser.add_argument("--color", choices=("vga", "hgc", "mono", "mda"),
                         help="Color mode: vga (default, full color), hgc (two-tone amber), mono (black & white), mda (amber monochrome)")
+    parser.add_argument("--console", action="store_true",
+                        help="Run in console mode instead of TUI (with ANSI colors)")
     parser.add_argument("--version", action="store_true",
                         help="Show version and exit")
     args = parser.parse_args()
@@ -1801,10 +1968,13 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    try:
-        curses.wrapper(lambda s: main_loop(s, cfg))
-    except KeyboardInterrupt:
-        pass
+    if args.console:
+        console_main(cfg)
+    else:
+        try:
+            curses.wrapper(lambda s: main_loop(s, cfg))
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
