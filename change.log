@@ -3,4 +3,13 @@ v0.0.2
 + Credentials window
 + Modyfied -h option (+header witah author, etc.)
 
+v0.0.3
++ Display public IP address by key 'a' 
++ CFG option for displaying public IP: PublicIP ON|OFF
 
+FUTURE:
+v0.0.4
++ --int INTERFACE1[,INTERFACE2,[..]] option for showing only some interfaces
+
+v0.0.5 
++ --color vga|hgc|mono for display in colors or mono (with Hercules odl DOS style :)

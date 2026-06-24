@@ -1,6 +1,6 @@
 # IMon — Interface Monitor TUI
 
-**Version 0.0.2** by Igor Brzezek
+**Version 0.0.3** by Igor Brzezek
 
 A terminal-based network interface monitor that displays all network interfaces with their MAC addresses, IP configuration, gateway, DHCP/STATUS status, and real-time traffic rates in a curses TUI (Text User Interface).
 
@@ -45,7 +45,7 @@ On first launch the tool looks for `imon.cfg` in the script's directory. If no c
 The screen is divided into three areas:
 
 ### 1. Top status bar
-Shows the application name, version, and a **PAUSED** label (blinking) when updates are frozen.
+Shows the application name, version, your public IP address (right-aligned, fetched from `api.ipify.org`), and a **PAUSED** label (blinking) when updates are frozen. Toggle the public IP display with the `A` key.
 
 ### 2. Main panels
 
@@ -98,6 +98,8 @@ Shows the hostname, number of detected interfaces, keyboard shortcut hints, and 
 | `N` | Open ping dialog |
 | `T` | Open traceroute dialog |
 | `P` | Pause / resume screen refresh |
+| `A` | Toggle public IP display in top bar |
+| `C` | Show credits (version, author, GitHub) |
 | `Q` | Quit the application |
 | `ESC` | Close any open popup |
 | `F1` | Same as `H` |
@@ -137,7 +139,7 @@ All settings are defined in `imon.cfg` (standard INI format). Below is a complet
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `app_name` | string | `IMon` | Name shown in the top status bar |
-| `version` | string | `0.0.2` | Version string displayed next to app name |
+| `version` | string | `0.0.3` | Version string displayed next to app name |
 | `author` | string | `Igor Brzezek` | Author name shown in `--version` output |
 | `refresh_interval_ms` | int | `1000` | TUI redraw interval in milliseconds |
 | `background_char` | string | `" "` (space) | Character used to fill the screen background; useful with block chars like `░`, `▒`, `▓` |
@@ -147,6 +149,7 @@ All settings are defined in `imon.cfg` (standard INI format). Below is a complet
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `show_loopback` | bool | `false` | Whether to show the loopback (`lo`) interface |
+| `show_public_ip` | bool | `true` | Whether to fetch and display the public IP in the top bar |
 | `show_hostname` | bool | `true` | Show hostname in the bottom status bar |
 | `show_datetime` | bool | `true` | Show current date/time in the bottom status bar |
 | `show_iface_count` | bool | `true` | Show number of detected interfaces in the bottom bar |
@@ -205,6 +208,8 @@ Single-character key bindings (case-insensitive).
 | `info` | `i` | Toggle colors & states info popup |
 | `ping` | `n` | Open ping dialog |
 | `traceroute` | `t` | Open traceroute dialog |
+| `credits` | `c` | Show credits popup (version, author, GitHub) |
+| `toggle_public_ip` | `a` | Toggle public IP display in the top bar |
 
 ### `[ping]`
 
@@ -263,6 +268,7 @@ Other tools are invoked with `-n` (numeric output only).
 4. DHCP detection checks running processes (`dhclient`, `dhcpcd`) and lease files in `/var/lib/dhcp/`.
 5. Traffic rates are computed as deltas between successive polls divided by the elapsed time.
 6. The curses TUI redraws at `refresh_interval_ms` intervals, reading from the shared state protected by a threading lock.
+7. **Public IP** is fetched from `https://api.ipify.org` in a background thread on startup and refreshed every 120 seconds. It is displayed in the top-right corner of the status bar and can be toggled with the `A` key or disabled via `show_public_ip = false` in the config.
 
 ---
 

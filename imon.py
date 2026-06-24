@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# IMon v0.0.2 by Igor Brzezek
+# IMon v0.0.3 by Igor Brzezek
 """Interface Monitor TUI — display all network interfaces with MAC, IP,
 gateway, DHCP/STATIC and real-time traffic rates.
 
@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -36,7 +37,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.2"
+SCRIPT_VERSION = "0.0.3"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 
@@ -193,11 +194,13 @@ class KeyConfig:
     ping: str = "n"
     traceroute: str = "t"
     credits: str = "c"
+    toggle_public_ip: str = "a"
 
 
 @dataclass
 class DisplayConfig:
     show_loopback: bool = False
+    show_public_ip: bool = True
     show_hostname: bool = True
     show_datetime: bool = True
     show_iface_count: bool = True
@@ -389,6 +392,8 @@ def load_config(path: Optional[str] = None) -> Config:
         dc = cfg.display
         if "show_loopback" in d:
             dc.show_loopback = d.getboolean("show_loopback")
+        if "show_public_ip" in d:
+            dc.show_public_ip = d.getboolean("show_public_ip")
         if "show_hostname" in d:
             dc.show_hostname = d.getboolean("show_hostname")
         if "show_datetime" in d:
@@ -414,6 +419,7 @@ def load_config(path: Optional[str] = None) -> Config:
         kc.ping = k.get("ping", kc.ping)
         kc.traceroute = k.get("traceroute", kc.traceroute)
         kc.credits = k.get("credits", kc.credits)
+        kc.toggle_public_ip = k.get("toggle_public_ip", kc.toggle_public_ip)
 
     if cp.has_section("network"):
         n = cp["network"]
@@ -793,7 +799,38 @@ class UIManager:
 
         self.show_splash = False
 
+        self.public_ip = ""
+        self.public_ip_visible = self.cfg.display.show_public_ip
+        self._start_public_ip_fetcher()
+
         self.hostname = socket.gethostname()
+
+    def _fetch_public_ip(self) -> str:
+        try:
+            req = urllib.request.Request(
+                "https://api.ipify.org",
+                headers={"User-Agent": "IMon/0.0.3"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.read().decode("utf-8").strip()
+        except Exception:
+            return ""
+
+    def _start_public_ip_fetcher(self):
+        def loop():
+            while True:
+                ip = self._fetch_public_ip()
+                if ip:
+                    self.public_ip = ip
+                    break
+                time.sleep(10)
+            while True:
+                time.sleep(120)
+                ip = self._fetch_public_ip()
+                if ip:
+                    self.public_ip = ip
+        t = threading.Thread(target=loop, daemon=True)
+        t.start()
 
     def get_size(self):
         h, w = self.stdscr.getmaxyx()
@@ -834,9 +871,15 @@ class UIManager:
         safe_addstr(self.stdscr, 0, 0,
                     f" {self.cfg.app_name} v{self.cfg.version}", attr)
 
+        right = ""
+        if self.public_ip_visible and self.public_ip:
+            right = f" {self.public_ip} "
         if self.state.paused:
-            safe_addstr(self.stdscr, 0, w - 10, " PAUSED ",
-                        attr | curses.A_BLINK)
+            right = f"{right} PAUSED " if right else " PAUSED "
+        if right:
+            right += " "
+            safe_addstr(self.stdscr, 0, w - len(right), right,
+                        attr | (curses.A_BLINK if self.state.paused else 0))
 
     def _draw_bottom_bar(self, h: int, w: int):
         attr = get_attr(self.cfg, "status_bar_bottom", bold=True)
@@ -855,7 +898,7 @@ class UIManager:
             safe_addstr(self.stdscr, y, col, f"  [{cnt} ifaces]", attr)
             col += len(f"  [{cnt} ifaces]")
 
-        hints = " H:Help  I:Info  P:Pause  N:Ping  T:Tracert  Q:Quit"
+        hints = " H:Help  I:Info  P:Pause  N:Ping  T:Tracert  A:PublicIP  C:Credits  Q:Quit"
         hx = max(col, (w - len(hints)) // 2)
         safe_addstr(self.stdscr, y, hx, hints, attr)
 
@@ -1087,6 +1130,8 @@ class UIManager:
             ("N",   "Ping dialog"),
             ("T",   "Trace route (tracert)"),
             ("P",   "Pause / resume refresh"),
+            ("A",   "Toggle public IP display"),
+            ("C",   "Show credits"),
             ("Q",   "Quit"),
             ("ESC", "Close popup"),
         ]
@@ -1573,6 +1618,9 @@ class UIManager:
             return True
         if cl == kc.credits:
             self.show_splash = not self.show_splash
+            return True
+        if cl == kc.toggle_public_ip:
+            self.public_ip_visible = not self.public_ip_visible
             return True
         return True
 
