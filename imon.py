@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# IMon v0.0.3 by Igor Brzezek
+# IMon v0.0.4 by Igor Brzezek
 """Interface Monitor TUI — display all network interfaces with MAC, IP,
 gateway, DHCP/STATIC and real-time traffic rates.
 
@@ -37,7 +37,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.3"
+SCRIPT_VERSION = "0.0.4"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 
@@ -212,6 +212,7 @@ class DisplayConfig:
     ipv6_width: int = 25
     traffic_rate_width: int = 10
     traffic_total_width: int = 10
+    interface_filter: set = field(default_factory=set)
 
 
 @dataclass
@@ -408,6 +409,12 @@ def load_config(path: Optional[str] = None) -> Config:
         dc.ipv6_width = d.getint("ipv6_width", dc.ipv6_width)
         dc.traffic_rate_width = d.getint("traffic_rate_width", dc.traffic_rate_width)
         dc.traffic_total_width = d.getint("traffic_total_width", dc.traffic_total_width)
+        if "interfaces" in d:
+            raw = d.get("interfaces", raw=True).strip().lower()
+            if raw and raw != "all":
+                dc.interface_filter = {x.strip() for x in raw.split(",") if x.strip()}
+            else:
+                dc.interface_filter = set()
 
     if cp.has_section("keys"):
         k = cp["keys"]
@@ -809,7 +816,7 @@ class UIManager:
         try:
             req = urllib.request.Request(
                 "https://api.ipify.org",
-                headers={"User-Agent": "IMon/0.0.3"},
+                headers={"User-Agent": "IMon/0.0.4"},
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.read().decode("utf-8").strip()
@@ -919,6 +926,8 @@ class UIManager:
 
         with self.state.lock:
             ifaces = list(self.state.interfaces.values())
+        if self.cfg.display.interface_filter:
+            ifaces = [i for i in ifaces if i.name in self.cfg.display.interface_filter]
 
         margin = 1
         inner_w = w - 2 * margin - 1
@@ -1670,6 +1679,8 @@ def main():
         description=f"IMon v{SCRIPT_VERSION} \u2014 Interface Monitor TUI by {SCRIPT_AUTHOR} ({SCRIPT_GITHUB})")
     parser.add_argument("-c", "--config", metavar="FILE",
                         help="Path to config file (default: imon.cfg)")
+    parser.add_argument("--int", metavar="IFACE",
+                        help="Comma-separated interface name(s) to monitor (e.g. eth0,wlan0)")
     parser.add_argument("--version", action="store_true",
                         help="Show version and exit")
     args = parser.parse_args()
@@ -1680,6 +1691,9 @@ def main():
         cfg_path = os.path.join(script_dir, "imon.cfg")
 
     cfg = load_config(cfg_path)
+
+    if args.int:
+        cfg.display.interface_filter = {x.strip() for x in args.int.split(",") if x.strip()}
 
     if args.version:
         print(f"{cfg.app_name} v{cfg.version} by {cfg.author}")

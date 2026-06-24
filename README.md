@@ -1,6 +1,6 @@
 # IMon — Interface Monitor TUI
 
-**Version 0.0.3** by Igor Brzezek
+**Version 0.0.4** by Igor Brzezek
 
 A terminal-based network interface monitor that displays all network interfaces with their MAC addresses, IP configuration, gateway, DHCP/STATUS status, and real-time traffic rates in a curses TUI (Text User Interface).
 
@@ -31,9 +31,11 @@ python imon.py
 ## Usage
 
 ```
-python imon.py                  # run with imon.cfg in the same directory
-python imon.py -c my.cfg        # use a custom config file
-python imon.py --version        # print version and exit
+python imon.py                                        # run with imon.cfg in the same directory
+python imon.py -c my.cfg                              # use a custom config file
+python imon.py --int eth0                             # monitor only eth0
+python imon.py --int eth0,wlan0,enp3s0                # monitor specific interfaces
+python imon.py --version                              # print version and exit
 ```
 
 On first launch the tool looks for `imon.cfg` in the script's directory. If no config file is found, all defaults are used.
@@ -139,7 +141,7 @@ All settings are defined in `imon.cfg` (standard INI format). Below is a complet
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `app_name` | string | `IMon` | Name shown in the top status bar |
-| `version` | string | `0.0.3` | Version string displayed next to app name |
+| `version` | string | `0.0.4` | Version string displayed next to app name |
 | `author` | string | `Igor Brzezek` | Author name shown in `--version` output |
 | `refresh_interval_ms` | int | `1000` | TUI redraw interval in milliseconds |
 | `background_char` | string | `" "` (space) | Character used to fill the screen background; useful with block chars like `░`, `▒`, `▓` |
@@ -161,6 +163,7 @@ All settings are defined in `imon.cfg` (standard INI format). Below is a complet
 | `ipv6_width` | int | `25` | Maximum width for the IPv6 address column |
 | `traffic_rate_width` | int | `10` | Maximum width for traffic rate columns (Up/Dn) |
 | `traffic_total_width` | int | `10` | Maximum width for traffic total columns (Tx/Rx) |
+| `interfaces` | string | `all` | Comma-separated list of interfaces to monitor (e.g. `eth0,wlan0`); `all` or empty = all |
 
 Column widths are dynamically adjusted to fit the terminal; these values serve as upper bounds.
 
