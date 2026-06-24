@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# IMon v0.0.1 by Igor Brzezek
+# IMon v0.0.2 by Igor Brzezek
 """Interface Monitor TUI — display all network interfaces with MAC, IP,
 gateway, DHCP/STATIC and real-time traffic rates.
 
@@ -36,7 +36,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.1"
+SCRIPT_VERSION = "0.0.2"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 
@@ -51,6 +51,13 @@ BOX_H  = "\u2550"
 BOX_V  = "\u2551"
 BOX_LT = "\u2560"
 BOX_RT = "\u2563"
+
+BOX_S_TL = "\u250C"
+BOX_S_TR = "\u2510"
+BOX_S_BL = "\u2514"
+BOX_S_BR = "\u2518"
+BOX_S_H  = "\u2500"
+BOX_S_V  = "\u2502"
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +114,10 @@ def format_datetime(fmt: str = "%d-%m-%Y %H:%M:%S") -> str:
 # Color mapping (same scheme as OVPNMonitor)
 # ---------------------------------------------------------------------------
 
+# Extended colour numbers (resolved at runtime in _init_extended_colors)
+COLOR_ORANGE = 16
+COLOR_GRAY   = 244  # xterm-256color medium gray (safe fallback)
+
 COLOR_MAP = {
     "black":   curses.COLOR_BLACK,
     "red":     curses.COLOR_RED,
@@ -116,6 +127,9 @@ COLOR_MAP = {
     "magenta": curses.COLOR_MAGENTA,
     "cyan":    curses.COLOR_CYAN,
     "white":   curses.COLOR_WHITE,
+    "orange":  COLOR_ORANGE,
+    "gray":    COLOR_GRAY,
+    "grey":    COLOR_GRAY,
 }
 
 
@@ -177,6 +191,8 @@ class KeyConfig:
     toggle_pause: str = "p"
     info: str = "i"
     ping: str = "n"
+    traceroute: str = "t"
+    credits: str = "c"
 
 
 @dataclass
@@ -201,6 +217,18 @@ class NetworkConfig:
     interface_interval: float = 5.0
 
 
+# Allowed traceroute programs
+TRACEROUTE_ALLOWED = {"tracepath", "traceroute", "mtr"}
+
+
+@dataclass
+class PopupConfig:
+    bg: Tuple[int, int] = (curses.COLOR_WHITE, curses.COLOR_BLACK)
+    border_fg: int = curses.COLOR_CYAN
+    border_bg: int = curses.COLOR_BLACK
+    border_double: bool = True
+
+
 @dataclass
 class Config:
     app_name: str = "IMon"
@@ -214,6 +242,8 @@ class Config:
     display: DisplayConfig = field(default_factory=DisplayConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     ping: PingThresholds = field(default_factory=PingThresholds)
+    popup: PopupConfig = field(default_factory=PopupConfig)
+    traceroute_cmd: str = "mtr"
     color_pairs: Dict[str, int] = field(default_factory=dict)
 
 
@@ -235,13 +265,23 @@ def register_color_pair(fg: int, bg: int) -> int:
     return pair_id
 
 
-def _init_orange():
-    """Try to initialise an orange colour (color number 16)."""
+def _resolve_gray():
+    """Return a usable gray colour number for this terminal."""
+    if curses.COLORS >= 256:
+        try:
+            curses.init_color(COLOR_GRAY, 500, 500, 500)
+        except curses.error:
+            pass
+        return COLOR_GRAY  # 244 is medium gray in xterm-256color
+    return curses.COLOR_WHITE
+
+
+def _init_extended_colors():
+    """Try to initialise custom colours (orange)."""
     try:
         curses.init_color(16, 1000, 600, 0)
-        return 16
     except curses.error:
-        return curses.COLOR_YELLOW
+        COLOR_MAP["orange"] = curses.COLOR_YELLOW
 
 
 def init_colors(cfg: Config) -> None:
@@ -265,12 +305,31 @@ def init_colors(cfg: Config) -> None:
 
     pairs["header_bg"] = register_color_pair(curses.COLOR_WHITE, cc.header_bg)
 
-    orange_fg = _init_orange()
+    _init_extended_colors()
+    resolved_gray = _resolve_gray()
+
+    pc2 = cfg.popup
+    # Resolve gray in popup colours
+    def _rg(c):
+        return resolved_gray if c == COLOR_GRAY else c
+    pc2.bg = (_rg(pc2.bg[0]), _rg(pc2.bg[1]))
+    pc2.border_fg = _rg(pc2.border_fg)
+    pc2.border_bg = _rg(pc2.border_bg)
+    popup_bg_color = pc2.bg[1]
+    pairs["popup_bg"] = register_color_pair(*pc2.bg)
+    pairs["popup_border"] = register_color_pair(pc2.border_fg, pc2.border_bg)
+    pairs["popup_text_normal"] = register_color_pair(cc.text_normal[0], popup_bg_color)
+    pairs["popup_text_label"] = register_color_pair(cc.text_label[0], popup_bg_color)
+    pairs["popup_text_value"] = register_color_pair(cc.text_value[0], popup_bg_color)
+    pairs["popup_text_warning"] = register_color_pair(cc.text_warning[0], popup_bg_color)
+    pairs["popup_text_error"] = register_color_pair(cc.text_error[0], popup_bg_color)
+    pairs["popup_border_title"] = register_color_pair(cc.border_title[0], popup_bg_color)
+
     pc = cfg.ping
     ping_fields = [
         ("ping_green", pc.color_green),
         ("ping_yellow", pc.color_yellow),
-        ("ping_orange", (orange_fg, pc.color_orange[1])),
+        ("ping_orange", (pc.color_orange[0], pc.color_orange[1])),
         ("ping_magenta", pc.color_magenta),
         ("ping_red", pc.color_red),
         ("ping_critical", pc.color_critical),
@@ -353,6 +412,8 @@ def load_config(path: Optional[str] = None) -> Config:
         kc.toggle_pause = k.get("toggle_pause", kc.toggle_pause)
         kc.info = k.get("info", kc.info)
         kc.ping = k.get("ping", kc.ping)
+        kc.traceroute = k.get("traceroute", kc.traceroute)
+        kc.credits = k.get("credits", kc.credits)
 
     if cp.has_section("network"):
         n = cp["network"]
@@ -372,6 +433,27 @@ def load_config(path: Optional[str] = None) -> Config:
                           "color_magenta", "color_red", "color_critical"):
             if color_key in p:
                 setattr(pt, color_key, parse_color_pair(p[color_key]))
+
+    if cp.has_section("traceroute"):
+        tr = cp["traceroute"]
+        if "command" in tr:
+            val = tr["command"].strip().lower()
+            if val in TRACEROUTE_ALLOWED:
+                cfg.traceroute_cmd = val
+
+    if cp.has_section("popup"):
+        p = cp["popup"]
+        pc2 = cfg.popup
+        if "background" in p:
+            pc2.bg = parse_color_pair(p["background"])
+        if "border_color" in p:
+            parts = [x.strip().lower() for x in p["border_color"].split(",")]
+            if len(parts) >= 1:
+                pc2.border_fg = COLOR_MAP.get(parts[0], curses.COLOR_CYAN)
+            if len(parts) >= 2:
+                pc2.border_bg = COLOR_MAP.get(parts[1], curses.COLOR_BLACK)
+        if "border_double" in p:
+            pc2.border_double = p.getboolean("border_double")
 
     return cfg
 
@@ -653,22 +735,27 @@ def safe_addstr(win, y: int, x: int, text: str, attr: int = 0):
 
 def draw_double_box(win, y: int, x: int, h: int, w: int,
                     title: str = "", attr: int = 0,
-                    title_attr: int = 0, fill_attr: int = 0):
+                    title_attr: int = 0, fill_attr: int = 0,
+                    double: bool = True):
     if h < 2 or w < 4:
         return
     if fill_attr:
         fill = " " * (w - 2)
         for r in range(1, h - 1):
             safe_addstr(win, y + r, x + 1, fill, fill_attr)
-    safe_addstr(win, y, x, BOX_TL, attr)
-    safe_addstr(win, y, x + 1, BOX_H * (w - 2), attr)
-    safe_addstr(win, y, x + w - 1, BOX_TR, attr)
+    tl, tr, bl, br, hh, vv = (
+        (BOX_TL, BOX_TR, BOX_BL, BOX_BR, BOX_H, BOX_V) if double
+        else (BOX_S_TL, BOX_S_TR, BOX_S_BL, BOX_S_BR, BOX_S_H, BOX_S_V)
+    )
+    safe_addstr(win, y, x, tl, attr)
+    safe_addstr(win, y, x + 1, hh * (w - 2), attr)
+    safe_addstr(win, y, x + w - 1, tr, attr)
     for r in range(1, h - 1):
-        safe_addstr(win, y + r, x, BOX_V, attr)
-        safe_addstr(win, y + r, x + w - 1, BOX_V, attr)
-    safe_addstr(win, y + h - 1, x, BOX_BL, attr)
-    safe_addstr(win, y + h - 1, x + 1, BOX_H * (w - 2), attr)
-    safe_addstr(win, y + h - 1, x + w - 1, BOX_BR, attr)
+        safe_addstr(win, y + r, x, vv, attr)
+        safe_addstr(win, y + r, x + w - 1, vv, attr)
+    safe_addstr(win, y + h - 1, x, bl, attr)
+    safe_addstr(win, y + h - 1, x + 1, hh * (w - 2), attr)
+    safe_addstr(win, y + h - 1, x + w - 1, br, attr)
     if title and w > len(title) + 4:
         t = f" {title} "
         tx = x + (w - len(t)) // 2
@@ -696,6 +783,16 @@ class UIManager:
         self.ping_running = False
         self.ping_error: Optional[str] = None
         self.ping_process = None
+
+        self.show_traceroute = False
+        self.traceroute_ip = ""
+        self.traceroute_output: List[str] = []
+        self.traceroute_running = False
+        self.traceroute_error: Optional[str] = None
+        self.traceroute_start: float = 0.0
+
+        self.show_splash = False
+
         self.hostname = socket.gethostname()
 
     def get_size(self):
@@ -715,12 +812,16 @@ class UIManager:
         self._draw_bottom_bar(h, w)
         self._draw_panels(h, w)
 
+        if self.show_splash:
+            self._draw_splash_popup(h, w)
         if self.show_help:
             self._draw_help_popup(h, w)
         if self.show_info:
             self._draw_info_popup(h, w)
         if self.show_ping:
             self._draw_ping_popup(h, w)
+        if self.show_traceroute:
+            self._draw_traceroute_popup(h, w)
 
         self.stdscr.noutrefresh()
         curses.doupdate()
@@ -754,7 +855,7 @@ class UIManager:
             safe_addstr(self.stdscr, y, col, f"  [{cnt} ifaces]", attr)
             col += len(f"  [{cnt} ifaces]")
 
-        hints = " H:Help  I:Info  P:Pause  N:Ping  Q:Quit"
+        hints = " H:Help  I:Info  P:Pause  N:Ping  T:Tracert  Q:Quit"
         hx = max(col, (w - len(hints)) // 2)
         safe_addstr(self.stdscr, y, hx, hints, attr)
 
@@ -945,6 +1046,35 @@ class UIManager:
 
     # -- Popup -------------------------------------------------------------
 
+    def _draw_splash_popup(self, h: int, w: int):
+        pw = min(46, w - 6)
+        ph = 8
+        py = (h - ph) // 2
+        px = (w - pw) // 2
+
+        bg = get_attr(self.cfg, "popup_bg")
+        for r in range(py, py + ph):
+            safe_addstr(self.stdscr, r, px, " " * pw, bg)
+
+        border_attr = get_attr(self.cfg, "popup_border")
+        title_attr = get_attr(self.cfg, "popup_border_title", bold=True)
+        draw_double_box(self.stdscr, py, px, ph, pw,
+                        self.cfg.app_name, border_attr, title_attr,
+                        double=self.cfg.popup.border_double)
+
+        label_attr = get_attr(self.cfg, "popup_text_label", bold=True)
+        val_attr = get_attr(self.cfg, "popup_text_value", bold=True)
+        norm_attr = get_attr(self.cfg, "popup_text_normal")
+
+        safe_addstr(self.stdscr, py + 2, px + 3, f"Version: {SCRIPT_VERSION}", val_attr)
+        safe_addstr(self.stdscr, py + 3, px + 3, f"Author:  {SCRIPT_AUTHOR}", norm_attr)
+        safe_addstr(self.stdscr, py + 4, px + 3, f"GitHub:  {SCRIPT_GITHUB}", norm_attr)
+
+        hint = "Press any key to dismiss"
+        hx = px + (pw - len(hint)) // 2
+        safe_addstr(self.stdscr, py + ph - 2, hx, hint,
+                    get_attr(self.cfg, "popup_text_warning"))
+
     def _draw_help_popup(self, h: int, w: int):
         pw = min(50, w - 6)
         items = [
@@ -955,6 +1085,7 @@ class UIManager:
             ("H",   "Toggle this help"),
             ("I",   "Toggle colors info"),
             ("N",   "Ping dialog"),
+            ("T",   "Trace route (tracert)"),
             ("P",   "Pause / resume refresh"),
             ("Q",   "Quit"),
             ("ESC", "Close popup"),
@@ -963,17 +1094,18 @@ class UIManager:
         py = (h - ph) // 2
         px = (w - pw) // 2
 
-        bg = get_attr(self.cfg, "text_normal")
+        bg = get_attr(self.cfg, "popup_bg")
         for r in range(py, py + ph):
             safe_addstr(self.stdscr, r, px, " " * pw, bg)
 
-        border_attr = get_attr(self.cfg, "border")
-        title_attr = get_attr(self.cfg, "border_title", bold=True)
+        border_attr = get_attr(self.cfg, "popup_border")
+        title_attr = get_attr(self.cfg, "popup_border_title", bold=True)
         draw_double_box(self.stdscr, py, px, ph, pw,
-                        "Help \u2014 Keyboard", border_attr, title_attr)
+                        f"Help \u2014 {self.cfg.app_name} v{SCRIPT_VERSION} by {SCRIPT_AUTHOR}", border_attr, title_attr,
+                        double=self.cfg.popup.border_double)
 
-        la = get_attr(self.cfg, "text_label", bold=True)
-        va = get_attr(self.cfg, "text_normal")
+        la = get_attr(self.cfg, "popup_text_label", bold=True)
+        va = get_attr(self.cfg, "popup_text_normal")
         for i, (k, d) in enumerate(items):
             if k == "":
                 continue
@@ -1000,24 +1132,25 @@ class UIManager:
         py = (h - ph) // 2
         px = (w - pw) // 2
 
-        bg = get_attr(self.cfg, "text_normal")
+        bg = get_attr(self.cfg, "popup_bg")
         for r in range(py, py + ph):
             safe_addstr(self.stdscr, r, px, " " * pw, bg)
 
-        border_attr = get_attr(self.cfg, "border")
-        title_attr = get_attr(self.cfg, "border_title", bold=True)
+        border_attr = get_attr(self.cfg, "popup_border")
+        title_attr = get_attr(self.cfg, "popup_border_title", bold=True)
         draw_double_box(self.stdscr, py, px, ph, pw,
-                        "Colors & States", border_attr, title_attr)
+                        "Colors & States", border_attr, title_attr,
+                        double=self.cfg.popup.border_double)
 
         for i, (text, kind) in enumerate(items):
             if not text:
                 continue
             if kind == "title":
-                attr = get_attr(self.cfg, "text_label", bold=True)
+                attr = get_attr(self.cfg, "popup_text_label", bold=True)
             elif kind:
                 attr = get_attr(self.cfg, kind)
             else:
-                attr = get_attr(self.cfg, "text_normal")
+                attr = get_attr(self.cfg, "popup_text_normal")
             safe_addstr(self.stdscr, py + 2 + i, px + 3, text, attr)
 
     # -- Ping -------------------------------------------------------------
@@ -1043,19 +1176,20 @@ class UIManager:
         py = (h - ph) // 2
         px = (w - pw) // 2
 
-        bg = get_attr(self.cfg, "text_normal")
+        bg = get_attr(self.cfg, "popup_bg")
         for r in range(py, py + ph):
             safe_addstr(self.stdscr, r, px, " " * pw, bg)
 
-        border_attr = get_attr(self.cfg, "border")
-        title_attr = get_attr(self.cfg, "border_title", bold=True)
+        border_attr = get_attr(self.cfg, "popup_border")
+        title_attr = get_attr(self.cfg, "popup_border_title", bold=True)
         draw_double_box(self.stdscr, py, px, ph, pw,
-                        "Ping", border_attr, title_attr)
+                        "Ping", border_attr, title_attr,
+                        double=self.cfg.popup.border_double)
 
-        label_attr = get_attr(self.cfg, "text_label", bold=True)
-        val_attr = get_attr(self.cfg, "text_value", bold=True)
-        norm_attr = get_attr(self.cfg, "text_normal")
-        warn_attr = get_attr(self.cfg, "text_warning")
+        label_attr = get_attr(self.cfg, "popup_text_label", bold=True)
+        val_attr = get_attr(self.cfg, "popup_text_value", bold=True)
+        norm_attr = get_attr(self.cfg, "popup_text_normal")
+        warn_attr = get_attr(self.cfg, "popup_text_warning")
 
         # -- IP input field --
         ip_label = "IP address:"
@@ -1096,7 +1230,7 @@ class UIManager:
         if self.ping_running:
             safe_addstr(self.stdscr, py + 7, px + 3, "Pinging...", warn_attr)
         elif self.ping_error:
-            err_attr = get_attr(self.cfg, "text_error")
+            err_attr = get_attr(self.cfg, "popup_text_error")
             safe_addstr(self.stdscr, py + 7, px + 3,
                         self.ping_error[:pw - 6], err_attr)
 
@@ -1124,7 +1258,7 @@ class UIManager:
             safe_addstr(self.stdscr, bar_y, bar_x, "░" * bar_w, norm_attr)
 
         # -- Hints --
-        hint_attr = get_attr(self.cfg, "text_warning")
+        hint_attr = get_attr(self.cfg, "popup_text_warning")
         if self.ping_running:
             hints = "[Esc] Stop & Close"
         else:
@@ -1203,10 +1337,154 @@ class UIManager:
         t = threading.Thread(target=_ping_thread, daemon=True)
         t.start()
 
+    # -- Traceroute -------------------------------------------------------
+
+    def _draw_traceroute_popup(self, h: int, w: int):
+        pw = min(80, w - 4)
+        ph = min(h - 4, 22)
+        py = (h - ph) // 2
+        px = (w - pw) // 2
+
+        bg = get_attr(self.cfg, "popup_bg")
+        for r in range(py, py + ph):
+            safe_addstr(self.stdscr, r, px, " " * pw, bg)
+
+        border_attr = get_attr(self.cfg, "popup_border")
+        title_attr = get_attr(self.cfg, "popup_border_title", bold=True)
+        draw_double_box(self.stdscr, py, px, ph, pw,
+                        "Trace Route", border_attr, title_attr,
+                        double=self.cfg.popup.border_double)
+
+        label_attr = get_attr(self.cfg, "popup_text_label", bold=True)
+        norm_attr = get_attr(self.cfg, "popup_text_normal")
+        warn_attr = get_attr(self.cfg, "popup_text_warning")
+        val_attr = get_attr(self.cfg, "popup_text_value", bold=True)
+
+        # IP input
+        safe_addstr(self.stdscr, py + 2, px + 3, "IP address:", label_attr)
+        ix = px + 3 + 12
+        iw = max(15, min(pw - 30, 16))  # 15 chars fits "111.111.111.111"
+        disp = self.traceroute_ip.ljust(iw)[:iw]
+        inp_attr = curses.A_REVERSE if not self.traceroute_running else norm_attr
+        safe_addstr(self.stdscr, py + 2, ix, disp, inp_attr)
+        if not self.traceroute_running:
+            safe_addstr(self.stdscr, py + 2, ix + iw + 2,
+                        "[Enter] Trace", warn_attr)
+
+        # Separator
+        safe_addstr(self.stdscr, py + 3, px + 2, BOX_H * (pw - 4), norm_attr)
+
+        # Output area
+        out_y = py + 4
+        out_h = ph - 6
+        out_w = pw - 6
+
+        elapsed = time.time() - self.traceroute_start if self.traceroute_running and self.traceroute_start else 0.0
+        if self.traceroute_output:
+            lines = self.traceroute_output[-(out_h - 1):]
+            for i, line in enumerate(lines):
+                if out_y + i >= py + ph - 2:
+                    break
+                safe_addstr(self.stdscr, out_y + i, px + 3,
+                            line[:out_w], norm_attr)
+            if self.traceroute_running:
+                safe_addstr(self.stdscr, out_y + len(lines), px + 3,
+                            f"Tracing... ({elapsed:.0f}s)", warn_attr)
+        elif self.traceroute_running:
+            safe_addstr(self.stdscr, out_y, px + 3,
+                        f"Tracing... ({elapsed:.0f}s)", warn_attr)
+        elif self.traceroute_error:
+            err_attr = get_attr(self.cfg, "popup_text_error")
+            safe_addstr(self.stdscr, out_y, px + 3,
+                        self.traceroute_error[:out_w], err_attr)
+        else:
+            safe_addstr(self.stdscr, out_y, px + 3,
+                        "Enter IP and press Enter", norm_attr)
+
+        # Hint
+        hint_attr = get_attr(self.cfg, "popup_text_warning")
+        hints = "[Esc] Close"
+        hx = px + (pw - len(hints)) // 2
+        safe_addstr(self.stdscr, py + ph - 2, hx, hints, hint_attr)
+
+    def _run_traceroute(self):
+        ip = self.traceroute_ip.strip()
+        if not ip:
+            self.traceroute_error = "No IP address entered"
+            return
+
+        cmd = self.cfg.traceroute_cmd
+        if cmd not in TRACEROUTE_ALLOWED:
+            allowed = ", ".join(sorted(TRACEROUTE_ALLOWED))
+            self.traceroute_error = f"Invalid command '{cmd}'. Allowed: {allowed}"
+            return
+
+        self.traceroute_output = []
+        self.traceroute_error = None
+        self.traceroute_running = True
+        self.traceroute_start = time.time()
+
+        # Build command with correct flags per tool
+        if cmd == "mtr":
+            args = [cmd, "-n", "-r", "-w", "-c", "10", ip]
+        else:
+            args = [cmd, "-n", ip]
+
+        def _traceroute_thread():
+            try:
+                out = subprocess.run(
+                    args,
+                    capture_output=True, text=True, timeout=30,
+                )
+                for line in out.stdout.splitlines():
+                    line = line.rstrip("\r")
+                    if line and not line.startswith("\x1b"):
+                        self.traceroute_output.append(line)
+                if not self.traceroute_output:
+                    err = out.stderr.strip() or f"'{cmd}' returned no data"
+                    self.traceroute_error = err[:80]
+            except FileNotFoundError:
+                self.traceroute_error = f"'{cmd}' not found on system"
+            except subprocess.TimeoutExpired:
+                self.traceroute_error = "Trace timed out (30s)"
+            except Exception as e:
+                self.traceroute_error = str(e)[:80]
+            finally:
+                self.traceroute_running = False
+
+        t = threading.Thread(target=_traceroute_thread, daemon=True)
+        t.start()
+
     def handle_key(self, key: int) -> bool:
         ch = chr(key) if 0 < key < 256 else ""
         cl = ch.lower()
         kc = self.cfg.keys
+
+        if self.show_splash:
+            self.show_splash = False
+            return True
+
+        if self.show_traceroute:
+            if key == 27:
+                self.show_traceroute = False
+                self.traceroute_ip = ""
+                self.traceroute_output = []
+                self.traceroute_error = None
+                self.traceroute_running = False
+                self.traceroute_start = 0.0
+                return True
+            if key in (10, 13) and not self.traceroute_running:
+                self._run_traceroute()
+                return True
+            if key in (127, 8, curses.KEY_BACKSPACE) and not self.traceroute_running:
+                self.traceroute_ip = self.traceroute_ip[:-1]
+                return True
+            if 32 <= key < 127 and not self.traceroute_running:
+                allowed = set("0123456789.:abcdefABCDEF")
+                if ch in allowed and len(self.traceroute_ip) < 39:
+                    self.traceroute_ip += ch
+                return True
+            return True
 
         if self.show_ping:
             if key == 27:
@@ -1284,6 +1562,18 @@ class UIManager:
                 self.ping_running = False
                 self.ping_process = None
             return True
+        if cl == kc.traceroute and not self.show_help and not self.show_info:
+            self.show_traceroute = not self.show_traceroute
+            if self.show_traceroute:
+                self.traceroute_ip = ""
+                self.traceroute_output = []
+                self.traceroute_error = None
+                self.traceroute_running = False
+                self.traceroute_start = 0.0
+            return True
+        if cl == kc.credits:
+            self.show_splash = not self.show_splash
+            return True
         return True
 
 
@@ -1329,7 +1619,7 @@ def main_loop(stdscr, cfg: Config):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="IMon \u2014 Interface Monitor TUI")
+        description=f"IMon v{SCRIPT_VERSION} \u2014 Interface Monitor TUI by {SCRIPT_AUTHOR} ({SCRIPT_GITHUB})")
     parser.add_argument("-c", "--config", metavar="FILE",
                         help="Path to config file (default: imon.cfg)")
     parser.add_argument("--version", action="store_true",
