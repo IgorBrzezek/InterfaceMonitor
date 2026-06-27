@@ -1871,12 +1871,49 @@ _CS = {
     "bg_blue":"\033[44m",
 }
 
+_CONSOLE_MONO = False
+_CONSOLE_HGC = False
+
 def _c(col: str, text: str, bold: bool = False, end: str = "") -> str:
+    if _CONSOLE_MONO:
+        return text
+    if _CONSOLE_HGC:
+        col = "yellow"
     b = _CS["bold"] if bold else ""
     return f"{b}{_CS.get(col, '')}{text}{_CS['rst']}{end}"
 
 
+def _console_fetch_pip() -> str:
+    services = [
+        "https://ifconfig.me/ip",
+        "https://api.ipify.org",
+        "https://ipinfo.io/ip",
+        "https://checkip.amazonaws.com",
+        "https://icanhazip.com",
+    ]
+    for url in services:
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                    "Accept": "*/*",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                ip = resp.read().decode("utf-8").strip()
+                if ip:
+                    return ip
+        except Exception:
+            continue
+    return ""
+
+
 def console_main(cfg: Config) -> None:
+    global _CONSOLE_MONO, _CONSOLE_HGC
+    _CONSOLE_MONO = (cfg.color_mode == "mono")
+    _CONSOLE_HGC = (cfg.color_mode in ("hgc", "mda"))
+
     state = MonitorState()
     collector = InterfaceCollector(
         state, cfg.network.interface_interval, cfg.display.show_loopback,
@@ -1892,8 +1929,31 @@ def console_main(cfg: Config) -> None:
         old = termios.tcgetattr(fd)
         tty.setcbreak(fd)
 
+    # Public IP state
+    pip_addr = ""
+    pip_visible = dc.show_public_ip
+    pip_state = 0  # 0=hidden, 1=visible, 2=error
+    pip_last_fetch = 0.0
+
+    def _pip_fetch_and_set():
+        nonlocal pip_addr, pip_state, pip_last_fetch
+        ip = _console_fetch_pip()
+        if ip:
+            pip_addr = ip
+            pip_state = 1
+        else:
+            pip_state = 2
+        pip_last_fetch = time.time()
+
+    if pip_visible:
+        _pip_fetch_and_set()
+
     try:
         while True:
+            now = time.time()
+            if pip_state == 1 and now - pip_last_fetch >= cfg.network.public_ip_refresh_interval:
+                _pip_fetch_and_set()
+
             sys.stdout.write("\033[2J\033[H")
 
             top = f" {cfg.app_name} v{cfg.version} "
@@ -1903,11 +1963,23 @@ def console_main(cfg: Config) -> None:
                 with state.lock:
                     cnt = len(state.interfaces)
                 top += f"  [{cnt} ifaces]"
+            pip_text = ""
+            if pip_state == 1:
+                pip_text = f"  Public IP: {pip_addr}"
+            elif pip_state == 2:
+                pip_text = "  Public IP: ERROR"
+            if pip_text:
+                top += pip_text
             if dc.show_datetime:
                 dt = format_datetime(dc.datetime_format)
                 top += " " * max(2, 80 - len(top) - len(dt) - 2)
                 top += dt
-            print(f"{_CS['bold']}{_CS['white']}{_CS['bg_blue']}{top}{_CS['rst']}")
+            if _CONSOLE_MONO:
+                print(top)
+            elif _CONSOLE_HGC:
+                print(f"{_CS['bold']}{_CS['yellow']}{top}{_CS['rst']}")
+            else:
+                print(f"{_CS['bold']}{_CS['white']}{_CS['bg_blue']}{top}{_CS['rst']}")
 
             with state.lock:
                 ifaces = list(state.interfaces.values())
@@ -1997,15 +2069,27 @@ def console_main(cfg: Config) -> None:
 
                 print(f"  {_c(col, f'{nm} ')}{_c('green', up, bold=True)} {_c('yellow', dn, bold=True)} {_c('white', tx)} {_c('white', rx)} {_c('white', pkt)}")
 
-            print(f"\n  {_c('green', '[q] Quit', bold=True)}")
+            hints = "[q] Quit"
+            if pip_state != 2:
+                hints += "  [A] PublicIP"
+            print(f"\n  {_c('green', hints, bold=True)}")
 
             sys.stdout.flush()
 
             if can_read_keys:
                 for _ in range(10):
                     r, _, _ = select.select([sys.stdin], [], [], cfg.refresh_interval_ms / 10000.0)
-                    if r and sys.stdin.read(1).lower() == 'q':
-                        return
+                    if r:
+                        ch = sys.stdin.read(1).lower()
+                        if ch == 'q':
+                            return
+                        if ch == 'a':
+                            if pip_state == 1:
+                                pip_state = 0
+                                pip_visible = False
+                            elif pip_state == 0:
+                                pip_visible = True
+                                _pip_fetch_and_set()
             else:
                 time.sleep(cfg.refresh_interval_ms / 1000.0)
     except KeyboardInterrupt:

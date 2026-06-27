@@ -13,10 +13,8 @@ v0.0.4
 v0.0.5 
 + --color vga|hgc|mono for display in colors or mono (with Hercules old DOS style :) 
 
-FUTURE:
-
 v0.0.6
-+ --console for display in simple style CLI not TUI
++ --console option for console view
 
 v0.0.7
 + Fixed public IP acquisition (browser-like User-Agent, longer timeout, additional services)
@@ -24,3 +22,13 @@ v0.0.7
   toggle with 'A' shows/hides/acquires IP; auto-refresh only while visible
 + Changed public_ip_acquiring default color to yellow,blue
 + Added config options: IPacquisition_fg_color, IPacquisition_bg_color
+
+v0.0.8
++ 'a' key in console view for Public IP displaying
++ Fixed --color option for console view
+
+
+
+FUTURE:
++ diplay DNS
++ Display DNS in TUI & console view
