@@ -41,7 +41,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.6"
+SCRIPT_VERSION = "0.0.7"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 
@@ -175,6 +175,10 @@ class ColorConfig:
     state_up_noip: Tuple[int, int] = (curses.COLOR_YELLOW, curses.COLOR_BLACK)
     state_down_hasip: Tuple[int, int] = (curses.COLOR_MAGENTA, curses.COLOR_BLACK)
     header_bg: int = curses.COLOR_BLUE
+    public_ip_normal: Tuple[int, int] = (curses.COLOR_WHITE, curses.COLOR_BLACK)
+    public_ip_error: Tuple[int, int] = (curses.COLOR_RED, curses.COLOR_BLACK)
+    public_ip_refreshing: Tuple[int, int] = (curses.COLOR_YELLOW, curses.COLOR_BLACK)
+    public_ip_acquiring: Tuple[int, int] = (curses.COLOR_YELLOW, curses.COLOR_BLUE)
 
 
 @dataclass
@@ -226,6 +230,7 @@ class DisplayConfig:
 class NetworkConfig:
     traffic_interval: float = 1.0
     interface_interval: float = 5.0
+    public_ip_refresh_interval: float = 5.0
 
 
 # Allowed traceroute programs
@@ -334,6 +339,8 @@ def init_colors(cfg: Config) -> None:
         "text_error", "highlight", "traffic_up", "traffic_dn",
         "dhcp_color", "static_color",
         "state_down", "state_up_noip", "state_down_hasip",
+        "public_ip_normal", "public_ip_error", "public_ip_refreshing",
+        "public_ip_acquiring",
     ]
     for name in color_fields:
         fg, bg = getattr(cc, name)
@@ -425,6 +432,17 @@ def load_config(path: Optional[str] = None) -> Config:
                 setattr(cc, fn, parse_color_pair(c[fn]))
         if "header_bg" in c:
             cc.header_bg = COLOR_MAP.get(c["header_bg"].strip().lower(), curses.COLOR_BLUE)
+        for pfn in ["public_ip_normal", "public_ip_error", "public_ip_refreshing", "public_ip_acquiring"]:
+            if pfn in c:
+                setattr(cc, pfn, parse_color_pair(c[pfn]))
+        if "IPacquisition_fg_color" in c:
+            fg = COLOR_MAP.get(c["IPacquisition_fg_color"].strip().lower())
+            if fg is not None:
+                cc.public_ip_acquiring = (fg, cc.public_ip_acquiring[1])
+        if "IPacquisition_bg_color" in c:
+            bg = COLOR_MAP.get(c["IPacquisition_bg_color"].strip().lower())
+            if bg is not None:
+                cc.public_ip_acquiring = (cc.public_ip_acquiring[0], bg)
 
     if cp.has_section("display"):
         d = cp["display"]
@@ -471,6 +489,7 @@ def load_config(path: Optional[str] = None) -> Config:
         nc = cfg.network
         nc.traffic_interval = n.getfloat("traffic_interval", nc.traffic_interval)
         nc.interface_interval = n.getfloat("interface_interval", nc.interface_interval)
+        nc.public_ip_refresh_interval = n.getfloat("public_ip_refresh_interval", nc.public_ip_refresh_interval)
 
     if cp.has_section("ping"):
         p = cp["ping"]
@@ -537,7 +556,9 @@ def _apply_color_mode(cfg: Config) -> None:
                 "text_normal", "text_label", "text_value", "text_warning",
                 "text_error", "highlight", "traffic_up", "traffic_dn",
                 "dhcp_color", "static_color",
-                "state_down", "state_up_noip", "state_down_hasip"]:
+                "state_down", "state_up_noip", "state_down_hasip",
+                "public_ip_normal", "public_ip_error", "public_ip_refreshing",
+                "public_ip_acquiring"]:
         setattr(cc, fn, (fg, black))
     cc.background = black
     cc.header_bg = black
@@ -888,36 +909,69 @@ class UIManager:
 
         self.show_splash = False
 
-        self.public_ip = ""
-        self.public_ip_visible = self.cfg.display.show_public_ip
-        self._start_public_ip_fetcher()
+        # Public IP state machine
+        # 0=acquiring, 1=visible, 2=hidden, 3=error, 4=refreshing
+        self.pip_addr = ""
+        self.pip_visible = self.cfg.display.show_public_ip
+        self.pip_state = 0 if self.pip_visible else 2
+        self._pip_refresh_event = threading.Event()
+        self._start_public_ip_manager()
 
         self.hostname = socket.gethostname()
 
     def _fetch_public_ip(self) -> str:
-        try:
-            req = urllib.request.Request(
-                "https://api.ipify.org",
-                headers={"User-Agent": "IMon/0.0.5"},
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                return resp.read().decode("utf-8").strip()
-        except Exception:
-            return ""
+        services = [
+            "https://ifconfig.me/ip",
+            "https://api.ipify.org",
+            "https://ipinfo.io/ip",
+            "https://checkip.amazonaws.com",
+            "https://icanhazip.com",
+        ]
+        for url in services:
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                        "Accept": "*/*",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    ip = resp.read().decode("utf-8").strip()
+                    if ip:
+                        return ip
+            except Exception:
+                continue
+        return ""
 
-    def _start_public_ip_fetcher(self):
+    def _start_public_ip_manager(self):
         def loop():
             while True:
-                ip = self._fetch_public_ip()
-                if ip:
-                    self.public_ip = ip
-                    break
-                time.sleep(10)
-            while True:
-                time.sleep(120)
-                ip = self._fetch_public_ip()
-                if ip:
-                    self.public_ip = ip
+                try:
+                    pip_visible = self.pip_visible
+                    pip_state = self.pip_state
+
+                    if pip_visible and pip_state in (0, 4):
+                        ip = self._fetch_public_ip()
+                        if ip:
+                            self.pip_addr = ip
+                            self.pip_state = 1
+                        elif not self.pip_addr:
+                            self.pip_state = 3
+                        else:
+                            self.pip_state = 1
+                except Exception:
+                    pass
+
+                self._pip_refresh_event.clear()
+
+                if self.pip_visible and self.pip_state == 1:
+                    timeout = self.cfg.network.public_ip_refresh_interval
+                else:
+                    timeout = 0.5
+
+                self._pip_refresh_event.wait(timeout=timeout)
+
         t = threading.Thread(target=loop, daemon=True)
         t.start()
 
@@ -966,15 +1020,41 @@ class UIManager:
         safe_addstr(self.stdscr, 0, 0,
                     f" {self.cfg.app_name} v{self.cfg.version}", attr)
 
-        right = ""
-        if self.public_ip_visible and self.public_ip:
-            right = f" {self.public_ip} "
+        pip_text = ""
+        pip_blink = False
+        pip_attr_name = "text_normal"
+
+        if self.pip_state == 0:
+            pip_text = "Public IP: acquisition in progress..."
+            pip_blink = True
+            pip_attr_name = "public_ip_acquiring"
+        elif self.pip_state == 1:
+            pip_text = f"Public IP: {self.pip_addr}"
+            pip_attr_name = "public_ip_normal"
+        elif self.pip_state == 2:
+            pip_text = "Public IP: known - hidden"
+            pip_attr_name = "public_ip_normal"
+        elif self.pip_state == 3:
+            pip_text = "Public IP: ERROR"
+            pip_attr_name = "public_ip_error"
+        elif self.pip_state == 4:
+            pip_text = "Public IP: refreshing..."
+            pip_blink = True
+            pip_attr_name = "public_ip_refreshing"
+
+        x = w - 1
         if self.state.paused:
-            right = f"{right} PAUSED " if right else " PAUSED "
-        if right:
-            right += " "
-            safe_addstr(self.stdscr, 0, w - len(right), right,
-                        attr | (curses.A_BLINK if self.state.paused else 0))
+            pause_text = " PAUSED "
+            x -= len(pause_text)
+            safe_addstr(self.stdscr, 0, x, pause_text, attr | curses.A_BLINK)
+            x -= 1
+
+        if pip_text:
+            pip_attr = get_attr(self.cfg, pip_attr_name, bold=True)
+            if pip_blink:
+                pip_attr |= curses.A_BLINK
+            x -= len(pip_text)
+            safe_addstr(self.stdscr, 0, x, pip_text, pip_attr)
 
     def _draw_bottom_bar(self, h: int, w: int):
         attr = get_attr(self.cfg, "status_bar_bottom", bold=True)
@@ -1719,8 +1799,14 @@ class UIManager:
         if cl == kc.credits:
             self.show_splash = not self.show_splash
             return True
-        if cl == kc.toggle_public_ip:
-            self.public_ip_visible = not self.public_ip_visible
+        if cl == kc.toggle_public_ip or ch == kc.toggle_public_ip:
+            if self.pip_state == 1:
+                self.pip_state = 2
+                self.pip_visible = False
+            elif self.pip_state == 2:
+                self.pip_state = 0
+                self.pip_visible = True
+                self._pip_refresh_event.set()
             return True
         return True
 

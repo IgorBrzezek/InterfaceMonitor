@@ -1,6 +1,6 @@
 # IMon — Interface Monitor TUI
 
-**Version 0.0.6** by Igor Brzezek
+**Version 0.0.7** by Igor Brzezek
 
 A terminal-based network interface monitor that displays all network interfaces with their MAC addresses, IP configuration, gateway, DHCP/STATUS status, and real-time traffic rates in a curses TUI (Text User Interface).
 
@@ -50,7 +50,16 @@ On first launch the tool looks for `imon.cfg` in the script's directory. If no c
 The screen is divided into three areas:
 
 ### 1. Top status bar
-Shows the application name, version, your public IP address (right-aligned, fetched from `api.ipify.org`), and a **PAUSED** label (blinking) when updates are frozen. Toggle the public IP display with the `A` key.
+Shows the application name, version, public IP status (right-aligned), and a **PAUSED** label (blinking) when updates are frozen. Toggle the public IP display with the `A` key.
+
+The public IP status area goes through these states:
+- **"Public IP: acquisition in progress..."** (blinking, yellow on blue by default) — shown while the address is being fetched (on startup when `show_public_ip = true`, or when toggled on with `A`)
+- **"Public IP: `ADDR`"** (white) — IP address successfully obtained and displayed
+- **"Public IP: hidden"** (white) — IP address available but display is hidden (either `show_public_ip = false` on startup, or toggled off with `A`)
+- **"Public IP: ERROR"** (red) — could not obtain an IP address from any of the fallback services
+- **"Public IP: refreshing..."** (blinking, yellow) — auto-refresh in progress (only when IP is visible)
+
+When `show_public_ip = false` in the config, no fetch is performed on startup — the status immediately shows "hidden". After pressing `A` the address is acquired and displayed. Pressing `A` again hides it (unless in ERROR state). The address is automatically refreshed at the interval set by `public_ip_refresh_interval` in the `[network]` section (default 5 seconds), but only while the IP is visible.
 
 ### 2. Main panels
 
@@ -170,7 +179,7 @@ All settings are defined in `imon.cfg` (standard INI format). Below is a complet
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `app_name` | string | `IMon` | Name shown in the top status bar |
-| `version` | string | `0.0.6` | Version string displayed next to app name |
+| `version` | string | `0.0.7` | Version string displayed next to app name |
 | `author` | string | `Igor Brzezek` | Author name shown in `--version` output |
 | `refresh_interval_ms` | int | `1000` | TUI redraw interval in milliseconds |
 | `color_mode` | string | `vga` | Color mode: `vga` (full color), `hgc` (amber monochrome), `mono` (black & white) |
@@ -228,6 +237,17 @@ Available color names: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cy
 The `orange` color is defined as RGB(1000, 600, 0) if the terminal supports `init_color`. If not, it falls back to yellow.
 
 The `gray`/`grey` color is defined as RGB(500, 500, 500) on terminals with 256+ colors (xterm color 244). On basic terminals it falls back to white.
+
+**Public IP colors:**
+
+| Option | Default | Description |
+|---|---|---|
+| `public_ip_normal` | `white,black` | Color for the public IP address and "known - hidden" text |
+| `public_ip_error` | `red,black` | Color for the "ERROR" message when public IP cannot be fetched |
+| `public_ip_refreshing` | `yellow,black` | Color for the "refreshing..." (blinking) text during refresh |
+| `public_ip_acquiring` | `yellow,blue` | Color for the "acquisition in progress..." (blinking) text during fetch |
+| `IPacquisition_fg_color` | — | Override the foreground color of `public_ip_acquiring` by name (e.g. `yellow`); applied after the pair above |
+| `IPacquisition_bg_color` | — | Override the background color of `public_ip_acquiring` by name (e.g. `blue`); applied after the pair above |
 
 ### `[keys]`
 
@@ -290,6 +310,7 @@ Other tools are invoked with `-n` (numeric output only).
 |---|---|---|---|
 | `traffic_interval` | float | `1.0` | How often to poll traffic counters (bytes/packets sent/recv) in seconds |
 | `interface_interval` | float | `5.0` | How often to refresh the interface list, addresses, and gateway information in seconds |
+| `public_ip_refresh_interval` | float | `5.0` | How often to refresh the public IP address (seconds) |
 
 ---
 
@@ -301,7 +322,7 @@ Other tools are invoked with `-n` (numeric output only).
 4. DHCP detection checks running processes (`dhclient`, `dhcpcd`) and lease files in `/var/lib/dhcp/`.
 5. Traffic rates are computed as deltas between successive polls divided by the elapsed time.
 6. The curses TUI redraws at `refresh_interval_ms` intervals, reading from the shared state protected by a threading lock.
-7. **Public IP** is fetched from `https://api.ipify.org` in a background thread on startup and refreshed every 120 seconds. It is displayed in the top-right corner of the status bar and can be toggled with the `A` key or disabled via `show_public_ip = false` in the config.
+7. **Public IP** is fetched from `https://ifconfig.me/ip` (with fallbacks) in a background thread. When `show_public_ip = true` the fetch starts on startup (acquisition→IP or ERROR). When `show_public_ip = false` no fetch occurs until the user presses `A`. Auto-refresh runs only while the IP is visible, at the interval set by `public_ip_refresh_interval` (default 5 seconds). Colors for each state are configurable under `[colors]`.
 
 ---
 

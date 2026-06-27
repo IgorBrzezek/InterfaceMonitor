@@ -17,3 +17,10 @@ FUTURE:
 
 v0.0.6
 + --console for display in simple style CLI not TUI
+
+v0.0.7
++ Fixed public IP acquisition (browser-like User-Agent, longer timeout, additional services)
++ Revised public IP state machine: no fetch on startup when show_public_ip=false;
+  toggle with 'A' shows/hides/acquires IP; auto-refresh only while visible
++ Changed public_ip_acquiring default color to yellow,blue
++ Added config options: IPacquisition_fg_color, IPacquisition_bg_color
