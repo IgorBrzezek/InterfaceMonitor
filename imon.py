@@ -179,6 +179,8 @@ class ColorConfig:
     public_ip_error: Tuple[int, int] = (curses.COLOR_RED, curses.COLOR_BLACK)
     public_ip_refreshing: Tuple[int, int] = (curses.COLOR_YELLOW, curses.COLOR_BLACK)
     public_ip_acquiring: Tuple[int, int] = (curses.COLOR_YELLOW, curses.COLOR_BLUE)
+    hgc_color: Tuple[int, int, int] = (235, 143, 52)
+    hgc_highlight: Tuple[int, int, int] = (235, 186, 52)
 
 
 @dataclass
@@ -297,7 +299,7 @@ def _resolve_gray():
     return curses.COLOR_WHITE
 
 
-def _init_extended_colors():
+def _init_extended_colors(hgc_color=(235, 143, 52), hgc_highlight=(235, 186, 52)):
     """Try to initialise custom colours (orange, HGC amber tones)."""
     try:
         curses.init_color(16, 1000, 600, 0)
@@ -307,8 +309,8 @@ def _init_extended_colors():
     # bright yellow (11) → bright amber.  If init_color fails,
     # the fallback yellow is still visible.
     for idx, r, g, b in (
-        (3,  922, 561, 204),  # RGB(235,143,52)  → 0-1000
-        (11, 922, 729, 204),  # RGB(235,186,52)  → 0-1000
+        (3,  hgc_color[0] * 1000 // 255, hgc_color[1] * 1000 // 255, hgc_color[2] * 1000 // 255),
+        (11, hgc_highlight[0] * 1000 // 255, hgc_highlight[1] * 1000 // 255, hgc_highlight[2] * 1000 // 255),
     ):
         try:
             curses.init_color(idx, r, g, b)
@@ -325,7 +327,7 @@ def init_colors(cfg: Config) -> None:
     cc = cfg.colors
     pairs = {}
 
-    _init_extended_colors()
+    _init_extended_colors(cc.hgc_color, cc.hgc_highlight)
     _apply_color_mode(cfg)
     resolved_gray = _resolve_gray()
 
@@ -444,6 +446,14 @@ def load_config(path: Optional[str] = None) -> Config:
             bg = COLOR_MAP.get(c["IPacquisition_bg_color"].strip().lower())
             if bg is not None:
                 cc.public_ip_acquiring = (cc.public_ip_acquiring[0], bg)
+        for hgc_opt in ("hgc_color", "hgc_highlight"):
+            if hgc_opt in c:
+                parts = [x.strip() for x in c[hgc_opt].split(",")]
+                if len(parts) == 3:
+                    try:
+                        setattr(cc, hgc_opt, (int(parts[0]), int(parts[1]), int(parts[2])))
+                    except ValueError:
+                        pass
 
     if cp.has_section("display"):
         d = cp["display"]
