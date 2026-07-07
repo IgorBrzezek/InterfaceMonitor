@@ -307,8 +307,8 @@ def _init_extended_colors():
     # bright yellow (11) → bright amber.  If init_color fails,
     # the fallback yellow is still visible.
     for idx, r, g, b in (
-        (3,  780, 450, 15),   # RGB(199,115,4)  → 0-1000
-        (11, 988, 560, 0),    # RGB(252,143,0)  → 0-1000
+        (3,  922, 561, 204),  # RGB(235,143,52)  → 0-1000
+        (11, 922, 729, 204),  # RGB(235,186,52)  → 0-1000
     ):
         try:
             curses.init_color(idx, r, g, b)
