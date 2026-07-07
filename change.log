@@ -27,8 +27,9 @@ v0.0.8
 + 'a' key in console view for Public IP displaying
 + Fixed --color option for console view
 
-
+v0.0.9
++ DNS popup ('d' key) showing DNS servers from /etc/resolv.conf
++ DNS config option in [keys]
 
 FUTURE:
-+ diplay DNS
-+ Display DNS in TUI & console view
++ Display DNS in console view

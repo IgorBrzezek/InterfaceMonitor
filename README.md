@@ -1,6 +1,6 @@
 # IMon — Interface Monitor TUI
 
-**Version 0.0.8** by Igor Brzezek
+**Version 0.0.9** by Igor Brzezek
 
 A terminal-based network interface monitor that displays all network interfaces with their MAC addresses, IP configuration, gateway, DHCP/STATUS status, and real-time traffic rates in a curses TUI (Text User Interface).
 
@@ -139,6 +139,7 @@ In `hgc` and `mono` modes, all color settings in `[colors]` and `[ping]` are ove
 | `T` | Open traceroute dialog |
 | `P` | Pause / resume screen refresh |
 | `A` | Toggle public IP display in top bar |
+| `D` | Show DNS configuration from /etc/resolv.conf |
 | `C` | Show credits (version, author, GitHub) |
 | `Q` | Quit the application |
 | `ESC` | Close any open popup |

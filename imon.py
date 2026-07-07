@@ -41,7 +41,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.8"
+SCRIPT_VERSION = "0.0.9"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 
@@ -205,6 +205,7 @@ class KeyConfig:
     ping: str = "n"
     traceroute: str = "t"
     credits: str = "c"
+    dns: str = "d"
     toggle_public_ip: str = "a"
 
 
@@ -482,6 +483,7 @@ def load_config(path: Optional[str] = None) -> Config:
         kc.ping = k.get("ping", kc.ping)
         kc.traceroute = k.get("traceroute", kc.traceroute)
         kc.credits = k.get("credits", kc.credits)
+        kc.dns = k.get("dns", kc.dns)
         kc.toggle_public_ip = k.get("toggle_public_ip", kc.toggle_public_ip)
 
     if cp.has_section("network"):
@@ -907,6 +909,10 @@ class UIManager:
         self.traceroute_error: Optional[str] = None
         self.traceroute_start: float = 0.0
 
+        self.show_dns = False
+        self.dns_ipv4: List[str] = []
+        self.dns_ipv6: List[str] = []
+
         self.show_splash = False
 
         # Public IP state machine
@@ -943,6 +949,26 @@ class UIManager:
             except Exception:
                 continue
         return ""
+
+    def _fetch_dns(self) -> None:
+        ipv4 = []
+        ipv6 = []
+        try:
+            with open("/etc/resolv.conf") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("nameserver"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            addr = parts[1]
+                            if ":" in addr:
+                                ipv6.append(addr)
+                            else:
+                                ipv4.append(addr)
+        except OSError:
+            pass
+        self.dns_ipv4 = ipv4
+        self.dns_ipv6 = ipv6
 
     def _start_public_ip_manager(self):
         def loop():
@@ -992,6 +1018,8 @@ class UIManager:
         self._draw_bottom_bar(h, w)
         self._draw_panels(h, w)
 
+        if self.show_dns:
+            self._draw_dns_popup(h, w)
         if self.show_splash:
             self._draw_splash_popup(h, w)
         if self.show_help:
@@ -1073,7 +1101,7 @@ class UIManager:
             safe_addstr(self.stdscr, y, col, f"  [{cnt} ifaces]", attr)
             col += len(f"  [{cnt} ifaces]")
 
-        hints = " H:Help  I:Info  P:Pause  N:Ping  T:Tracert  A:PublicIP  C:Credits  Q:Quit"
+        hints = " H:Help  I:Info  P:Pause  N:Ping  T:Tracert  A:PublicIP  D:DNS  C:Credits  Q:Quit"
         hx = max(col, (w - len(hints)) // 2)
         safe_addstr(self.stdscr, y, hx, hints, attr)
 
@@ -1295,6 +1323,47 @@ class UIManager:
         safe_addstr(self.stdscr, py + ph - 2, hx, hint,
                     get_attr(self.cfg, "popup_text_warning"))
 
+    def _draw_dns_popup(self, h: int, w: int):
+        dns4 = self.dns_ipv4 if self.dns_ipv4 else ["(none)"]
+        dns6 = self.dns_ipv6 if self.dns_ipv6 else ["(none)"]
+
+        content_lines = 2 + len(dns4) + 1 + 1 + len(dns6)
+        ph = min(h - 4, content_lines + 4)
+        pw = min(46, w - 6)
+        py = (h - ph) // 2
+        px = (w - pw) // 2
+
+        bg = get_attr(self.cfg, "popup_bg")
+        for r in range(py, py + ph):
+            safe_addstr(self.stdscr, r, px, " " * pw, bg)
+
+        border_attr = get_attr(self.cfg, "popup_border")
+        title_attr = get_attr(self.cfg, "popup_border_title", bold=True)
+        draw_double_box(self.stdscr, py, px, ph, pw, "DNS",
+                        border_attr, title_attr,
+                        double=self.cfg.popup.border_double)
+
+        label_attr = get_attr(self.cfg, "popup_text_label", bold=True)
+        val_attr = get_attr(self.cfg, "popup_text_value", bold=True)
+
+        row = py + 2
+        safe_addstr(self.stdscr, row, px + 3, "IPv4 DNS Servers:", label_attr)
+        row += 1
+        for addr in dns4:
+            safe_addstr(self.stdscr, row, px + 5, addr, val_attr)
+            row += 1
+        row += 1
+        safe_addstr(self.stdscr, row, px + 3, "IPv6 DNS Servers:", label_attr)
+        row += 1
+        for addr in dns6:
+            safe_addstr(self.stdscr, row, px + 5, addr, val_attr)
+            row += 1
+
+        hint_attr = get_attr(self.cfg, "popup_text_warning")
+        hints = "[Esc] Close"
+        hx = px + (pw - len(hints)) // 2
+        safe_addstr(self.stdscr, py + ph - 2, hx, hints, hint_attr)
+
     def _draw_help_popup(self, h: int, w: int):
         pw = min(50, w - 6)
         color_modes = {"vga": "VGA (full color)", "hgc": "HGC (amber)", "mono": "MONO (B&W)"}
@@ -1311,6 +1380,7 @@ class UIManager:
             ("T",   "Trace route (tracert)"),
             ("P",   "Pause / resume refresh"),
             ("A",   "Toggle public IP display"),
+            ("D",   "Show DNS configuration"),
             ("C",   "Show credits"),
             ("Q",   "Quit"),
             ("ESC", "Close popup"),
@@ -1758,6 +1828,7 @@ class UIManager:
         if key == 27:
             self.show_help = False
             self.show_info = False
+            self.show_dns = False
             return True
         if cl == kc.help or key == curses.KEY_F1:
             self.show_help = not self.show_help
@@ -1795,6 +1866,11 @@ class UIManager:
                 self.traceroute_error = None
                 self.traceroute_running = False
                 self.traceroute_start = 0.0
+            return True
+        if cl == kc.dns and not self.show_help and not self.show_info:
+            self.show_dns = not self.show_dns
+            if self.show_dns:
+                self._fetch_dns()
             return True
         if cl == kc.credits:
             self.show_splash = not self.show_splash
