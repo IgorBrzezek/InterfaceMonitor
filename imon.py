@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# IMon v0.0.5 by Igor Brzezek
+
 """Interface Monitor TUI — display all network interfaces with MAC, IP,
 gateway, DHCP/STATIC and real-time traffic rates.
 
@@ -41,7 +41,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.7"
+SCRIPT_VERSION = "0.0.8"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 

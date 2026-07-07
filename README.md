@@ -1,6 +1,6 @@
 # IMon — Interface Monitor TUI
 
-**Version 0.0.7** by Igor Brzezek
+**Version 0.0.8** by Igor Brzezek
 
 A terminal-based network interface monitor that displays all network interfaces with their MAC addresses, IP configuration, gateway, DHCP/STATUS status, and real-time traffic rates in a curses TUI (Text User Interface).
 
