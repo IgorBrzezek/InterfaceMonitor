@@ -290,7 +290,7 @@ def _resolve_gray():
     if curses.COLORS >= 256:
         try:
             curses.init_color(COLOR_GRAY, 500, 500, 500)
-        except curses.error:
+        except (curses.error, ValueError):
             pass
         return COLOR_GRAY  # 244 is medium gray in xterm-256color
     return curses.COLOR_WHITE
@@ -300,7 +300,7 @@ def _init_extended_colors():
     """Try to initialise custom colours (orange, HGC amber tones)."""
     try:
         curses.init_color(16, 1000, 600, 0)
-    except curses.error:
+    except (curses.error, ValueError):
         COLOR_MAP["orange"] = curses.COLOR_YELLOW
     # Best-effort: try to make ANSI yellow (3) → dark amber and
     # bright yellow (11) → bright amber.  If init_color fails,
@@ -311,7 +311,7 @@ def _init_extended_colors():
     ):
         try:
             curses.init_color(idx, r, g, b)
-        except curses.error:
+        except (curses.error, ValueError):
             pass
 
 
