@@ -31,5 +31,11 @@ v0.0.9
 + DNS popup ('d' key) showing DNS servers from /etc/resolv.conf
 + DNS config option in [keys]
 
+v0.0.10
++ Routes popup ('r' key) showing IPv4 and IPv6 routing tables
++ Default route highlighted in configurable color (route_default)
++ Section headers in configurable color (route_header)
++ Config options: route_header, route_default in [colors]; routes in [keys]
+
 FUTURE:
 + Display DNS in console view

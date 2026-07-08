@@ -1,6 +1,6 @@
 # IMon — Interface Monitor TUI
 
-**Version 0.0.9** by Igor Brzezek
+**Version 0.0.10** by Igor Brzezek
 
 A terminal-based network interface monitor that displays all network interfaces with their MAC addresses, IP configuration, gateway, DHCP/STATUS status, and real-time traffic rates in a curses TUI (Text User Interface).
 
@@ -61,7 +61,16 @@ The public IP status area goes through these states:
 
 When `show_public_ip = false` in the config, no fetch is performed on startup — the status immediately shows "hidden". After pressing `A` the address is acquired and displayed. Pressing `A` again hides it (unless in ERROR state). The address is automatically refreshed at the interval set by `public_ip_refresh_interval` in the `[network]` section (default 5 seconds), but only while the IP is visible.
 
-### 2. Main panels
+### 2. Routes popup (`R`)
+
+Press `R` to open a popup window showing the system routing table. The display is split into two sections:
+
+- **IPv4 Routes** — output of `ip route show`
+- **IPv6 Routes** — output of `ip -6 route show`
+
+Default routes (`default via ...`) are highlighted in a configurable color (default: yellow). Section headers appear in cyan by default. Both colors can be customized in the `[colors]` config section (`route_header` and `route_default`).
+
+### 3. Main panels
 
 #### Interfaces panel
 A table with the following columns:
@@ -98,7 +107,7 @@ A table showing real-time bandwidth usage:
 
 Rate units auto-scale: B/s, KB/s, MB/s, GB/s.
 
-### 3. Bottom status bar
+### 4. Bottom status bar
 Shows the hostname, number of detected interfaces, keyboard shortcut hints, and the current date/time.
 
 ---
@@ -140,6 +149,7 @@ In `hgc` and `mono` modes, all color settings in `[colors]` and `[ping]` are ove
 | `P` | Pause / resume screen refresh |
 | `A` | Toggle public IP display in top bar |
 | `D` | Show DNS configuration from /etc/resolv.conf |
+| `R` | Show IPv4 and IPv6 routing tables (default route highlighted) |
 | `C` | Show credits (version, author, GitHub) |
 | `Q` | Quit the application |
 | `ESC` | Close any open popup |
@@ -264,6 +274,7 @@ Single-character key bindings (case-insensitive).
 | `traceroute` | `t` | Open traceroute dialog |
 | `credits` | `c` | Show credits popup (version, author, GitHub) |
 | `toggle_public_ip` | `a` | Toggle public IP display in the top bar |
+| `routes` | `r` | Show IPv4 and IPv6 routing tables |
 
 ### `[ping]`
 
@@ -287,6 +298,13 @@ Each threshold also has a corresponding color pair option:
 | `color_magenta` | `magenta,black` |
 | `color_red` | `red,black` |
 | `color_critical` | `red,black` |
+
+**Route colors:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `route_header` | `cyan,black` | Section headers in the Routes popup (IPv4 Routes:, IPv6 Routes:) |
+| `route_default` | `yellow,black` | Default route lines in the Routes popup |
 
 ### `[popup]`
 

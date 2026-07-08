@@ -41,7 +41,7 @@ except ImportError:
 # Info data
 # ---------------------------------------------------------------------------
 SCRIPT_AUTHOR = "Igor Brzezek"
-SCRIPT_VERSION = "0.0.9"
+SCRIPT_VERSION = "0.0.10"
 SCRIPT_GITHUB = "https://github.com/igorbrzezek"
 
 
@@ -179,6 +179,8 @@ class ColorConfig:
     public_ip_error: Tuple[int, int] = (curses.COLOR_RED, curses.COLOR_BLACK)
     public_ip_refreshing: Tuple[int, int] = (curses.COLOR_YELLOW, curses.COLOR_BLACK)
     public_ip_acquiring: Tuple[int, int] = (curses.COLOR_YELLOW, curses.COLOR_BLUE)
+    route_header: Tuple[int, int] = (curses.COLOR_CYAN, curses.COLOR_BLACK)
+    route_default: Tuple[int, int] = (curses.COLOR_YELLOW, curses.COLOR_BLACK)
     hgc_color: Tuple[int, int, int] = (235, 143, 52)
     hgc_highlight: Tuple[int, int, int] = (235, 186, 52)
 
@@ -208,6 +210,7 @@ class KeyConfig:
     traceroute: str = "t"
     credits: str = "c"
     dns: str = "d"
+    routes: str = "r"
     toggle_public_ip: str = "a"
 
 
@@ -344,6 +347,7 @@ def init_colors(cfg: Config) -> None:
         "state_down", "state_up_noip", "state_down_hasip",
         "public_ip_normal", "public_ip_error", "public_ip_refreshing",
         "public_ip_acquiring",
+        "route_header", "route_default",
     ]
     for name in color_fields:
         fg, bg = getattr(cc, name)
@@ -370,6 +374,8 @@ def init_colors(cfg: Config) -> None:
     pairs["popup_text_warning"] = register_color_pair(cc.text_warning[0], popup_bg_color)
     pairs["popup_text_error"] = register_color_pair(cc.text_error[0], popup_bg_color)
     pairs["popup_border_title"] = register_color_pair(cc.border_title[0], popup_bg_color)
+    pairs["popup_route_header"] = register_color_pair(cc.route_header[0], popup_bg_color)
+    pairs["popup_route_default"] = register_color_pair(cc.route_default[0], popup_bg_color)
 
     pc = cfg.ping
     ping_fields = [
@@ -430,7 +436,8 @@ def load_config(path: Optional[str] = None) -> Config:
                     "text_normal", "text_label", "text_value", "text_warning",
                     "text_error", "highlight", "traffic_up", "traffic_dn",
                     "dhcp_color", "static_color",
-                    "state_down", "state_up_noip", "state_down_hasip"]:
+                    "state_down", "state_up_noip", "state_down_hasip",
+                    "route_header", "route_default"]:
             if fn in c:
                 setattr(cc, fn, parse_color_pair(c[fn]))
         if "header_bg" in c:
@@ -494,6 +501,7 @@ def load_config(path: Optional[str] = None) -> Config:
         kc.traceroute = k.get("traceroute", kc.traceroute)
         kc.credits = k.get("credits", kc.credits)
         kc.dns = k.get("dns", kc.dns)
+        kc.routes = k.get("routes", kc.routes)
         kc.toggle_public_ip = k.get("toggle_public_ip", kc.toggle_public_ip)
 
     if cp.has_section("network"):
@@ -567,10 +575,11 @@ def _apply_color_mode(cfg: Config) -> None:
     for fn in ["status_bar_top", "status_bar_bottom", "border", "border_title",
                 "text_normal", "text_label", "text_value", "text_warning",
                 "text_error", "highlight", "traffic_up", "traffic_dn",
-                "dhcp_color", "static_color",
-                "state_down", "state_up_noip", "state_down_hasip",
-                "public_ip_normal", "public_ip_error", "public_ip_refreshing",
-                "public_ip_acquiring"]:
+                    "dhcp_color", "static_color",
+                    "state_down", "state_up_noip", "state_down_hasip",
+                    "public_ip_normal", "public_ip_error", "public_ip_refreshing",
+                    "public_ip_acquiring",
+                    "route_header", "route_default"]:
         setattr(cc, fn, (fg, black))
     cc.background = black
     cc.header_bg = black
@@ -923,6 +932,10 @@ class UIManager:
         self.dns_ipv4: List[str] = []
         self.dns_ipv6: List[str] = []
 
+        self.show_routes = False
+        self.routes_ipv4: List[str] = []
+        self.routes_ipv6: List[str] = []
+
         self.show_splash = False
 
         # Public IP state machine
@@ -979,6 +992,32 @@ class UIManager:
             pass
         self.dns_ipv4 = ipv4
         self.dns_ipv6 = ipv6
+
+    def _fetch_routes(self):
+        self.routes_ipv4 = []
+        self.routes_ipv6 = []
+        try:
+            out = subprocess.run(
+                ["ip", "route", "show"],
+                capture_output=True, text=True, timeout=3
+            )
+            for line in out.stdout.splitlines():
+                line = line.rstrip()
+                if line:
+                    self.routes_ipv4.append(line)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        try:
+            out = subprocess.run(
+                ["ip", "-6", "route", "show"],
+                capture_output=True, text=True, timeout=3
+            )
+            for line in out.stdout.splitlines():
+                line = line.rstrip()
+                if line:
+                    self.routes_ipv6.append(line)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
 
     def _start_public_ip_manager(self):
         def loop():
@@ -1040,6 +1079,8 @@ class UIManager:
             self._draw_ping_popup(h, w)
         if self.show_traceroute:
             self._draw_traceroute_popup(h, w)
+        if self.show_routes:
+            self._draw_routes_popup(h, w)
 
         self.stdscr.noutrefresh()
         curses.doupdate()
@@ -1111,7 +1152,7 @@ class UIManager:
             safe_addstr(self.stdscr, y, col, f"  [{cnt} ifaces]", attr)
             col += len(f"  [{cnt} ifaces]")
 
-        hints = " H:Help  I:Info  P:Pause  N:Ping  T:Tracert  A:PublicIP  D:DNS  C:Credits  Q:Quit"
+        hints = " H:Help  I:Info  P:Pause  N:Ping  T:Tracert  A:PublicIP  D:DNS  R:Routes  C:Credits  Q:Quit"
         hx = max(col, (w - len(hints)) // 2)
         safe_addstr(self.stdscr, y, hx, hints, attr)
 
@@ -1416,6 +1457,63 @@ class UIManager:
                 continue
             safe_addstr(self.stdscr, py + 2 + i, px + 3, f"  {k:>8s} ", la)
             safe_addstr(self.stdscr, py + 2 + i, px + 16, d, va)
+
+    # -- Routes popup ------------------------------------------------------
+
+    def _draw_routes_popup(self, h: int, w: int):
+        ipv4_lines = self.routes_ipv4 if self.routes_ipv4 else ["(no routes)"]
+        ipv6_lines = self.routes_ipv6 if self.routes_ipv6 else ["(no routes)"]
+
+        content_lines = 2 + len(ipv4_lines) + 1 + len(ipv6_lines)
+        ph = min(h - 4, content_lines + 4)
+        pw = min(80, w - 6)
+        py = (h - ph) // 2
+        px = (w - pw) // 2
+
+        bg = get_attr(self.cfg, "popup_bg")
+        for r in range(py, py + ph):
+            safe_addstr(self.stdscr, r, px, " " * pw, bg)
+
+        border_attr = get_attr(self.cfg, "popup_border")
+        title_attr = get_attr(self.cfg, "popup_border_title", bold=True)
+        draw_double_box(self.stdscr, py, px, ph, pw,
+                        "Routes", border_attr, title_attr,
+                        double=self.cfg.popup.border_double)
+
+        rh_attr = get_attr(self.cfg, "popup_route_header", bold=True)
+        rd_attr = get_attr(self.cfg, "popup_route_default", bold=True)
+        norm_attr = get_attr(self.cfg, "popup_text_normal")
+        out_w = pw - 6
+
+        row = py + 2
+
+        safe_addstr(self.stdscr, row, px + 3, "IPv4 Routes:", rh_attr)
+        row += 1
+        for line in ipv4_lines:
+            if row >= py + ph - 2:
+                break
+            attr = rd_attr if line.startswith("default") else norm_attr
+            safe_addstr(self.stdscr, row, px + 3, line[:out_w], attr)
+            row += 1
+
+        if row < py + ph - 2:
+            row += 1
+            safe_addstr(self.stdscr, row, px + 3, "IPv6 Routes:", rh_attr)
+            row += 1
+        else:
+            row = py + ph - 2
+
+        for line in ipv6_lines:
+            if row >= py + ph - 2:
+                break
+            attr = rd_attr if line.startswith("default") else norm_attr
+            safe_addstr(self.stdscr, row, px + 3, line[:out_w], attr)
+            row += 1
+
+        hint_attr = get_attr(self.cfg, "popup_text_warning")
+        hints = "[Esc] Close"
+        hx = px + (pw - len(hints)) // 2
+        safe_addstr(self.stdscr, py + ph - 2, hx, hints, hint_attr)
 
     # -- Input -------------------------------------------------------------
 
@@ -1839,6 +1937,7 @@ class UIManager:
             self.show_help = False
             self.show_info = False
             self.show_dns = False
+            self.show_routes = False
             return True
         if cl == kc.help or key == curses.KEY_F1:
             self.show_help = not self.show_help
@@ -1881,6 +1980,11 @@ class UIManager:
             self.show_dns = not self.show_dns
             if self.show_dns:
                 self._fetch_dns()
+            return True
+        if cl == kc.routes and not self.show_help and not self.show_info:
+            self.show_routes = not self.show_routes
+            if self.show_routes:
+                self._fetch_routes()
             return True
         if cl == kc.credits:
             self.show_splash = not self.show_splash
